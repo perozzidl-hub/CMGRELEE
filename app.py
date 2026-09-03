@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from src.data_processing import load_and_transform_data
@@ -78,7 +79,7 @@ if uploaded_file is not None:
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_right:
-        # Gráfico por Canal / Locación
+        # Gráfico por Canal
         cm_por_canal = df_filtered.groupby('Canal').agg({'Facturacion_Neta': 'sum', 'contribucion_marginal': 'sum'}).reset_index()
         fig_bar = px.bar(cm_por_canal, x='Canal', y=['Facturacion_Neta', 'contribucion_marginal'], 
                          barmode='group', title='Facturación vs CM por Canal',
