@@ -131,7 +131,10 @@ with tab_resumen:
     por_mes = venta_f.groupby("Mes", as_index=False)["Facturacion Neta"].sum()
     por_mes["Contribución Marginal"] = venta_cm_f.groupby("Mes")["CM ($)"].sum().values
     por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
-    st.bar_chart(por_mes.set_index("Mes"))
+    # Formato largo + stack=False: barras separadas por mes, una por concepto,
+    # para no dar a entender que la CM se suma arriba de la Facturación.
+    por_mes_largo = por_mes.melt(id_vars="Mes", var_name="Concepto", value_name="Monto")
+    st.bar_chart(por_mes_largo, x="Mes", y="Monto", color="Concepto", stack=False)
 
     col_a, col_b = st.columns(2)
     with col_a:
