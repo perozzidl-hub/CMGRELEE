@@ -245,12 +245,16 @@ def fig_cascada(df_cascada):
     return fig
 
 
-def fig_top_clientes(por_cliente, columna_valor, top_n=10):
-    d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor)
+def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
+    d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor, ascending=False)
     etiqueta = d["Nom.Cliente"].fillna(d["Cliente"].astype(str)).astype(str)
     # Nombres muy largos se truncan SOLO para la etiqueta del gráfico (la tabla de abajo
     # sigue mostrando el nombre completo) — si no, un nombre largo empuja todo el margen.
     etiqueta = etiqueta.where(etiqueta.str.len() <= 28, etiqueta.str.slice(0, 27) + "…")
+
+    if titulo_eje_x is None:
+        titulo_eje_x = "Contribución Marginal ($)" if columna_valor == "CM_pesos" else "Facturación Neta ($)"
+
     fig = go.Figure(go.Bar(
         x=d[columna_valor], y=etiqueta, orientation="h",
         marker=dict(color=ROJO),
@@ -260,9 +264,13 @@ def fig_top_clientes(por_cliente, columna_valor, top_n=10):
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
         height=max(280, 34 * len(d)),
-        xaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
-        yaxis=dict(automargin=True),
-        margin=dict(l=10, r=100, t=10, b=10),
+        xaxis=dict(
+            title=dict(text=titulo_eje_x, font=dict(size=12)),
+            gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f", automargin=True,
+        ),
+        yaxis=dict(title=dict(text="Cliente", font=dict(size=12)), automargin=True,
+                   categoryorder="total ascending"),
+        margin=dict(l=10, r=100, t=30, b=10),
     )
     return fig
 
@@ -522,7 +530,10 @@ with tab_articulo:
     columna_top = "CM_pesos" if calculable else "Facturacion_Neta"
     etiqueta_top = "Contribución Marginal" if calculable else "Facturación Neta"
     st.caption(f"Top {min(10, len(por_cliente))} clientes por {etiqueta_top}")
-    st.plotly_chart(fig_top_clientes(por_cliente, columna_top), width="stretch", theme=None, config=CONFIG_CHART)
+    st.plotly_chart(
+    fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
+    width="stretch", theme=None, config=CONFIG_CHART,
+    )
 
     with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
         st.dataframe(estilo_resumen(por_cliente) if calculable else por_cliente, width="stretch", hide_index=True)
