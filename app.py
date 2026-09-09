@@ -367,11 +367,12 @@ def calcular(_datos: dict, pallets_por_camion: int) -> pd.DataFrame:
 
 def clear_filters():
     """Limpia únicamente los filtros visuales; conserva archivo, datos y cálculo."""
-    st.session_state["filtro_mes"] = meses_disp
-    st.session_state["filtro_locacion"] = []
-    st.session_state["filtro_canal"] = []
-    # La selección de artículo se vuelve a iniciar con el universo completo.
-    st.session_state.pop("articulo_sel", None)
+    # No asignamos meses_disp aquí porque los callbacks/botones pueden
+    # ejecutarse antes de que esa variable exista en el rerun actual.
+    # Al eliminar las claves, los widgets vuelven a inicializarse con
+    # sus valores por defecto en el siguiente rerun.
+    for key in ("filtro_mes", "filtro_locacion", "filtro_canal", "articulo_sel"):
+        st.session_state.pop(key, None)
 
 
 def refresh_data():
