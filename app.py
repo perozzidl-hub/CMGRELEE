@@ -46,7 +46,30 @@ PLOTLY_BASE = dict(
     font=dict(family="Inter, -apple-system, sans-serif", color=CARBON, size=13),
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
+    separators=",.",  # formato local: decimal="," / miles="."
 )
+
+
+# ----------------------------------------------------------------------
+# FORMATO NUMÉRICO (criterio local: miles con ".", decimales con ",")
+# ----------------------------------------------------------------------
+def fmt_n(valor, decimales=0):
+    """Número con criterio local: miles con ".", decimales con ",". NaN -> "—"."""
+    if pd.isna(valor):
+        return "—"
+    s = f"{valor:,.{decimales}f}"
+    return s.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def fmt_pesos(valor, decimales=0):
+    return f"$ {fmt_n(valor, decimales)}"
+
+
+def fmt_entero(valor):
+    """Códigos de cliente: siempre enteros, sin decimales."""
+    if pd.isna(valor):
+        return "—"
+    return str(int(round(float(valor))))
 
 
 def aplicar_estilos():
@@ -144,16 +167,19 @@ def _color_semaforo(valor, vmin, vmax):
 
 
 def estilo_resumen(df):
-    """Formatea $ / % / enteros y colorea CM_% en forma relativa. No cambia ningún valor."""
+    """Formatea $ / % / enteros (criterio local) y colorea CM_% en forma relativa.
+    No cambia ningún valor."""
     fmt = {}
     for col in ("Facturacion_Neta", "CM_pesos"):
         if col in df.columns:
-            fmt[col] = "$ {:,.0f}"
+            fmt[col] = fmt_pesos
     for col in ("Cajas_Fisicas", "Clientes"):
         if col in df.columns:
-            fmt[col] = "{:,.0f}"
+            fmt[col] = fmt_n
+    if "Cliente" in df.columns:  # código de cliente siempre entero
+        fmt["Cliente"] = fmt_entero
     if "CM_%" in df.columns:
-        fmt["CM_%"] = "{:,.1f}%"
+        fmt["CM_%"] = lambda v: f"{fmt_n(v, 1)}%"
     styler = df.style.format(fmt, na_rep="—")
     if "CM_%" in df.columns and df["CM_%"].notna().any():
         vmin, vmax = df["CM_%"].min(), df["CM_%"].max()
@@ -170,7 +196,16 @@ def estilo_cascada(df_cascada):
         color = ROJO if row["Monto"] < 0 else GRIS_TEXTO
         return [f"color:{color}"] * len(row)
 
-    return df_cascada.style.format({"Monto": "$ {:,.0f}"}, na_rep="—").apply(_fila, axis=1)
+    return df_cascada.style.format({"Monto": fmt_pesos}, na_rep="—").apply(_fila, axis=1)
+
+
+def estilo_codigo_cliente_entero(df):
+    """Tab 'Datos crudos': muestra la hoja tal cual, salvo el código de
+    cliente, que siempre se ve como entero."""
+    styler = df.style
+    if "Cliente" in df.columns:
+        styler = styler.format({"Cliente": fmt_entero}, na_rep="—")
+    return styler
 
 
 def boton_descarga(df, nombre_archivo, label="⬇️ Descargar CSV"):
@@ -228,7 +263,7 @@ def fig_cascada(df_cascada):
     fig = go.Figure(go.Waterfall(
         orientation="v", measure=medidas,
         x=df_cascada["Concepto"], y=df_cascada["Monto"],
-        text=[f"$ {v:,.0f}" for v in df_cascada["Monto"]], textposition="outside",
+        text=[fmt_pesos(v) for v in df_cascada["Monto"]], textposition="outside",
         cliponaxis=False,
         connector=dict(line=dict(color=GRIS_BORDE, width=1)),
         increasing=dict(marker=dict(color=VERDE)),
@@ -251,7 +286,7 @@ def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
     # Etiqueta SIEMPRE "código - nombre": un mismo nombre con distinto código
     # es una boca distinta y tiene que verse como cliente distinto.
     nombres = d["Nom.Cliente"].fillna("").astype(str)
-    codigos = d["Cliente"].astype(str)
+    codigos = d["Cliente"].map(fmt_entero)  # código siempre entero
     etiqueta = (codigos + " - " + nombres)
     # Truncar el nombre (no el código) para que el margen izquierdo no se dispare.
     max_largo = 32
@@ -266,7 +301,7 @@ def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
     fig = go.Figure(go.Bar(
         x=d[columna_valor], y=etiqueta, orientation="h",
         marker=dict(color=ROJO),
-        text=[f"$ {v:,.0f}" for v in d[columna_valor]], textposition="outside",
+        text=[fmt_pesos(v) for v in d[columna_valor]], textposition="outside",
         cliponaxis=False,
     ))
     fig.update_layout(**PLOTLY_BASE)
@@ -341,13 +376,13 @@ dxl = datos["datosxlocacion"]
 fletest0 = datos["fletest0"]
 
 n_sin_costeo = (~venta_cm["CM_calculada"]).sum()
-st.success(f"Archivo cargado: {len(venta_cm):,} filas de venta.")
+st.success(f"Archivo cargado: {fmt_n(len(venta_cm))} filas de venta.")
 if n_sin_costeo:
     tipos_sin_costeo = sorted(
         venta_cm.loc[~venta_cm["CM_calculada"], "Tipo de Prod."].dropna().unique()
     )
     st.warning(
-        f"⚠️ {n_sin_costeo:,} filas son de artículos con Tipo de Prod. {tipos_sin_costeo} "
+        f"⚠️ {fmt_n(n_sin_costeo)} filas son de artículos con Tipo de Prod. {tipos_sin_costeo} "
         "— todavía sin regla de costeo definida (solo P y R están cubiertos). "
         "Quedan afuera de los totales de Contribución Marginal de abajo."
     )
@@ -406,20 +441,20 @@ with tab_resumen:
     fact_total = venta_f["Facturacion Neta"].sum()
     cm_total = venta_cm_f["CM ($)"].sum()
     c1.metric(
-        "Facturación Neta", f"$ {fact_total:,.0f}",
+        "Facturación Neta", fmt_pesos(fact_total),
         help="Suma de la Facturación Neta de todas las filas filtradas, incluyendo artículos sin regla de costeo definida.",
     )
     c2.metric(
-        "Contribución Marginal", f"$ {cm_total:,.0f}",
+        "Contribución Marginal", fmt_pesos(cm_total),
         help="Suma de la Contribución Marginal solo de las filas con regla de costeo definida (Tipo P o R).",
     )
     cm_pct = cm_total / venta_cm_f["Facturacion Neta"].sum() * 100 if len(venta_cm_f) else 0
     c3.metric(
-        "CM % (ponderado)", f"{cm_pct:,.1f}%",
+        "CM % (ponderado)", f"{fmt_n(cm_pct, 1)}%",
         help="CM total dividida por la Facturación Neta de las filas con CM calculada (no por el total general de la primera tarjeta).",
     )
     c4.metric(
-        "Clientes distintos", f"{venta_f['Cliente'].nunique():,}",
+        "Clientes distintos", fmt_n(venta_f["Cliente"].nunique()),
         help="Clientes únicos en las filas filtradas (todas, no solo las que tienen CM calculada).",
     )
 
@@ -492,18 +527,18 @@ with tab_articulo:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
-        "Facturación Neta", f"$ {v_art['Facturacion Neta'].sum():,.0f}",
+        "Facturación Neta", fmt_pesos(v_art["Facturacion Neta"].sum()),
         help="Facturación neta de este artículo en el período y los filtros seleccionados.",
     )
     c2.metric(
-        "Cajas Físicas", f"{v_art['Cajas Fisicas'].sum():,.0f}",
+        "Cajas Físicas", fmt_n(v_art["Cajas Fisicas"].sum()),
         help="Cajas físicas vendidas de este artículo en el período y los filtros seleccionados.",
     )
     if calculable:
         cm_art = v_art["CM ($)"].sum()
         cm_pct_art = cm_art / v_art["Facturacion Neta"].sum() * 100
-        c3.metric("Contribución Marginal", f"$ {cm_art:,.0f}")
-        c4.metric("CM %", f"{cm_pct_art:,.1f}%")
+        c3.metric("Contribución Marginal", fmt_pesos(cm_art))
+        c4.metric("CM %", f"{fmt_n(cm_pct_art, 1)}%")
     else:
         c3.metric("Contribución Marginal", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
         c4.metric("CM %", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
@@ -539,8 +574,8 @@ with tab_articulo:
     etiqueta_top = "Contribución Marginal" if calculable else "Facturación Neta"
     st.caption(f"Top {min(10, len(por_cliente))} clientes por {etiqueta_top}")
     st.plotly_chart(
-    fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
-    width="stretch", theme=None, config=CONFIG_CHART,
+        fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
+        width="stretch", theme=None, config=CONFIG_CHART,
     )
 
     with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
@@ -595,8 +630,8 @@ with tab_crudo:
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
     hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
     df_hoja = opciones_hojas[hoja]
-    st.dataframe(df_hoja, width="stretch")
+    st.dataframe(estilo_codigo_cliente_entero(df_hoja), width="stretch")
     col_info, col_btn = st.columns([3, 1])
-    col_info.caption(f"{df_hoja.shape[0]:,} filas x {df_hoja.shape[1]} columnas")
+    col_info.caption(f"{fmt_n(df_hoja.shape[0])} filas x {df_hoja.shape[1]} columnas")
     with col_btn:
         boton_descarga(df_hoja, f"{str(hoja).replace(' ', '_')}.csv")
