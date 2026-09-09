@@ -200,7 +200,7 @@ def fig_tendencia_mensual(por_mes):
     fig.update_layout(
         height=320, hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
+        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f", automargin=True),
         margin=dict(l=8, r=8, t=36, b=8),
     )
     return fig
@@ -229,6 +229,7 @@ def fig_cascada(df_cascada):
         orientation="v", measure=medidas,
         x=df_cascada["Concepto"], y=df_cascada["Monto"],
         text=[f"$ {v:,.0f}" for v in df_cascada["Monto"]], textposition="outside",
+        cliponaxis=False,
         connector=dict(line=dict(color=GRIS_BORDE, width=1)),
         increasing=dict(marker=dict(color=VERDE)),
         decreasing=dict(marker=dict(color=ROJO)),
@@ -237,26 +238,31 @@ def fig_cascada(df_cascada):
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
         height=380, showlegend=False,
-        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
-        xaxis=dict(tickangle=-15),
-        margin=dict(l=8, r=8, t=30, b=8),
+        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f", automargin=True),
+        xaxis=dict(tickangle=-15, automargin=True),
+        margin=dict(l=8, r=8, t=40, b=8),
     )
     return fig
 
 
 def fig_top_clientes(por_cliente, columna_valor, top_n=10):
     d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor)
-    etiqueta = d["Nom.Cliente"].fillna(d["Cliente"].astype(str))
+    etiqueta = d["Nom.Cliente"].fillna(d["Cliente"].astype(str)).astype(str)
+    # Nombres muy largos se truncan SOLO para la etiqueta del gráfico (la tabla de abajo
+    # sigue mostrando el nombre completo) — si no, un nombre largo empuja todo el margen.
+    etiqueta = etiqueta.where(etiqueta.str.len() <= 28, etiqueta.str.slice(0, 27) + "…")
     fig = go.Figure(go.Bar(
         x=d[columna_valor], y=etiqueta, orientation="h",
         marker=dict(color=ROJO),
         text=[f"$ {v:,.0f}" for v in d[columna_valor]], textposition="outside",
+        cliponaxis=False,
     ))
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
         height=max(280, 34 * len(d)),
-        xaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
-        margin=dict(l=10, r=70, t=10, b=10),
+        xaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(automargin=True),
+        margin=dict(l=10, r=100, t=10, b=10),
     )
     return fig
 
