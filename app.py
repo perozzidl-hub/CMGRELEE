@@ -153,6 +153,38 @@ st.markdown(
             letter-spacing: 0.08em;
         }
 
+        .sidebar-actions {
+            background: #F8FAFC;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 10px;
+            margin: 0 0 14px;
+        }
+
+        .sidebar-action-title {
+            color: var(--navy);
+            font-size: 0.78rem;
+            font-weight: 850;
+            margin-bottom: 2px;
+        }
+
+        .sidebar-action-help {
+            color: var(--muted);
+            font-size: 0.68rem;
+            line-height: 1.35;
+            margin-bottom: 9px;
+        }
+
+        .sidebar-actions button {
+            border-radius: 9px !important;
+            font-weight: 750 !important;
+        }
+
+        .sidebar-actions button[kind="primary"] {
+            background: var(--coke-red) !important;
+            border-color: var(--coke-red) !important;
+        }
+
         /* ---------- Tabs ---------- */
         button[data-baseweb="tab"] {
             font-weight: 750 !important;
@@ -333,7 +365,48 @@ def calcular(_datos: dict, pallets_por_camion: int) -> pd.DataFrame:
     return calcular_cmg(_datos, pallets_por_camion=pallets_por_camion)
 
 
+def reset_dashboard_state():
+    """Restablece controles de exploración; no altera datos ni lógica de negocio."""
+    for key in (
+        "filtro_mes",
+        "filtro_locacion",
+        "filtro_canal",
+        "articulo_sel",
+        "hoja_sel",
+    ):
+        st.session_state.pop(key, None)
+
+
+def refresh_data():
+    """Fuerza la recarga visual y de datos limpiando únicamente las cachés de Streamlit."""
+    cargar.clear()
+    calcular.clear()
+
+
 render_header()
+
+st.sidebar.markdown(
+    """
+    <div class="sidebar-actions">
+        <div class="sidebar-action-title">Control del dashboard</div>
+        <div class="sidebar-action-help">
+            Actualizá el modelo o volvé al estado inicial sin salir de la aplicación.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+col_refresh, col_reset = st.sidebar.columns(2)
+with col_refresh:
+    if st.button("↻ Actualizar", use_container_width=True, type="primary", help="Limpia la caché de datos y vuelve a calcular la Contribución Marginal."):
+        refresh_data()
+        st.rerun()
+
+with col_reset:
+    if st.button("↺ Restablecer", use_container_width=True, help="Vuelve a todos los filtros y selecciones al estado inicial."):
+        reset_dashboard_state()
+        st.rerun()
 
 archivo = st.sidebar.file_uploader("Subí el archivo AppCMG.xlsx", type=["xlsx"])
 
@@ -358,7 +431,12 @@ datos = cargar(archivo)
 
 st.sidebar.markdown('<div class="sidebar-label">Supuestos</div>', unsafe_allow_html=True)
 pallets_por_camion = st.sidebar.number_input(
-    "Pallets por camión (Flete T1)", min_value=1, value=PALLETS_POR_CAMION, step=1
+    "Pallets por camión (Flete T1)",
+    min_value=1,
+    value=PALLETS_POR_CAMION,
+    step=1,
+    key="pallets_por_camion",
+    help="Supuesto utilizado por el cálculo del Flete T1.",
 )
 
 venta_cm = calcular(datos, pallets_por_camion)
@@ -393,12 +471,17 @@ meses_sel = st.sidebar.multiselect(
     options=meses_disp,
     default=meses_disp,
     format_func=lambda m: pd.Timestamp(m).strftime("%Y-%m"),
+    key="filtro_mes",
 )
 locaciones_sel = st.sidebar.multiselect(
-    "Locación", options=sorted(venta_cm["Locación"].dropna().unique())
+    "Locación",
+    options=sorted(venta_cm["Locación"].dropna().unique()),
+    key="filtro_locacion",
 )
 canales_sel = st.sidebar.multiselect(
-    "Canal", options=sorted(venta_cm["Canal"].dropna().unique())
+    "Canal",
+    options=sorted(venta_cm["Canal"].dropna().unique()),
+    key="filtro_canal",
 )
 
 venta_f = venta_cm[venta_cm["Mes"].isin(meses_sel)]
@@ -549,7 +632,12 @@ with tab_articulo:
         f"{row['Cod. Venta']} - {row['Descripción del material']}": row["Cod. Venta"]
         for _, row in articulos_disp.iterrows()
     }
-    elegido = st.selectbox("Elegí un artículo", options=list(opciones.keys()))
+    elegido = st.selectbox(
+        "Elegí un artículo",
+        options=list(opciones.keys()),
+        key="articulo_sel",
+        help="La selección se actualiza automáticamente al cambiar los filtros globales.",
+    )
     cod = opciones[elegido]
 
     v_art = venta_f[venta_f["Cod. Venta"] == cod]
@@ -716,7 +804,11 @@ with tab_articulo:
 with tab_crudo:
     render_section_header("Modelo de datos", "Explorador de datos crudos")
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
-    hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
+    hoja = st.selectbox(
+        "Elegí una hoja",
+        options=list(opciones_hojas.keys()),
+        key="hoja_sel",
+    )
     st.dataframe(opciones_hojas[hoja], use_container_width=True)
     filas, columnas = opciones_hojas[hoja].shape
     st.caption(f"{filas:,} filas × {columnas:,} columnas")
