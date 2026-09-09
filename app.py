@@ -365,16 +365,13 @@ def calcular(_datos: dict, pallets_por_camion: int) -> pd.DataFrame:
     return calcular_cmg(_datos, pallets_por_camion=pallets_por_camion)
 
 
-def reset_dashboard_state():
-    """Restablece controles de exploración; no altera datos ni lógica de negocio."""
-    for key in (
-        "filtro_mes",
-        "filtro_locacion",
-        "filtro_canal",
-        "articulo_sel",
-        "hoja_sel",
-    ):
-        st.session_state.pop(key, None)
+def clear_filters():
+    """Limpia únicamente los filtros visuales; conserva archivo, datos y cálculo."""
+    st.session_state["filtro_mes"] = meses_disp
+    st.session_state["filtro_locacion"] = []
+    st.session_state["filtro_canal"] = []
+    # La selección de artículo se vuelve a iniciar con el universo completo.
+    st.session_state.pop("articulo_sel", None)
 
 
 def refresh_data():
@@ -390,7 +387,7 @@ st.sidebar.markdown(
     <div class="sidebar-actions">
         <div class="sidebar-action-title">Control del dashboard</div>
         <div class="sidebar-action-help">
-            Actualizá el modelo o volvé al estado inicial sin salir de la aplicación.
+            Actualizá los datos o limpiá los filtros sin volver a cargar el Excel.
         </div>
     </div>
     """,
@@ -404,8 +401,8 @@ with col_refresh:
         st.rerun()
 
 with col_reset:
-    if st.button("↺ Restablecer", use_container_width=True, help="Vuelve a todos los filtros y selecciones al estado inicial."):
-        reset_dashboard_state()
+    if st.button("✕ Limpiar filtros", use_container_width=True, help="Quita Locación y Canal, recupera todos los meses y mantiene el archivo cargado."):
+        clear_filters()
         st.rerun()
 
 archivo = st.sidebar.file_uploader("Subí el archivo AppCMG.xlsx", type=["xlsx"])
