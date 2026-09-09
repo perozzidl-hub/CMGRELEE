@@ -5,355 +5,269 @@ Streamlit app para navegar al máximo nivel de detalle la venta (clientes,
 locaciones, canales) y la Contribución Marginal calculada para cada
 artículo, cliente, locación y canal.
 
+Capa visual (paleta corporativa, tooltips, gráficos con Plotly) actualizada.
+La carga de datos y el cálculo de CM (data_loader.py / calculo_cmg.py) no
+se modificaron.
+
 Ejecutar con:
     streamlit run app.py
 """
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from data_loader import cargar_todo
 from calculo_cmg import calcular_cmg, COLUMNAS_CASCADA, PALLETS_POR_CAMION
 
-
-# ----------------------------------------------------------------------
-# Configuración visual — capa de presentación únicamente
-# ----------------------------------------------------------------------
 st.set_page_config(
-    page_title="AppCMG | Contribución Marginal",
+    page_title="AppCMG - Contribución Marginal al detalle",
     page_icon="🥤",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
-    <style>
-        /* ---------- Sistema visual ---------- */
-        :root {
-            --coke-red: #F40009;
-            --coke-red-dark: #C90008;
-            --navy: #1A2B4C;
-            --blue: #2A5C8E;
-            --ink: #233044;
-            --muted: #6B778C;
-            --bg: #F4F6F9;
-            --card: #FFFFFF;
-            --border: #E4E9F0;
-            --success: #1E8E5A;
-            --warning: #D97706;
-            --radius: 12px;
-            --shadow: 0 3px 14px rgba(26, 43, 76, 0.07);
-        }
+# ======================================================================
+# IDENTIDAD VISUAL
+# Paleta corporativa inspirada en Coca-Cola (aproximación para uso interno:
+# si tenés el hex oficial de tu manual de marca, reemplazalo acá).
+# ======================================================================
+ROJO = "#E4032E"
+CARBON = "#1A1A1A"
+BLANCO = "#FFFFFF"
+CREMA = "#FAFAF8"
+GRIS_BORDE = "#E5E2DD"
+GRIS_TEXTO = "#6B6B6B"
+VERDE = "#1E8A44"
+DORADO = "#B8902E"
 
-        .stApp {
-            background: var(--bg);
-        }
+PALETA_CATEGORICA = [ROJO, CARBON, DORADO, "#8C8C8C", "#F0A6A6", "#D9C48A", "#5C5C5C"]
 
-        /* ---------- Ancho y navegación ---------- */
-        .block-container {
-            padding-top: 1.25rem;
-            padding-bottom: 2.5rem;
-            max-width: 1500px;
-        }
-
-        /* ---------- Header principal ---------- */
-        .app-header {
-            background: linear-gradient(135deg, var(--navy) 0%, #203F68 65%, var(--blue) 100%);
-            border-radius: 16px;
-            padding: 22px 28px 20px;
-            margin-bottom: 18px;
-            box-shadow: 0 7px 24px rgba(26, 43, 76, 0.14);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .app-header::after {
-            content: "";
-            position: absolute;
-            width: 220px;
-            height: 220px;
-            border-radius: 50%;
-            right: -70px;
-            top: -100px;
-            background: rgba(244, 0, 9, 0.18);
-        }
-
-        .app-kicker {
-            color: #D7E4F2;
-            font-size: 0.74rem;
-            font-weight: 800;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            margin-bottom: 5px;
-        }
-
-        .app-title {
-            color: #FFFFFF;
-            font-size: 2rem;
-            line-height: 1.1;
-            font-weight: 800;
-            margin: 0;
-        }
-
-        .app-subtitle {
-            color: #DCE7F4;
-            margin-top: 7px;
-            font-size: 0.95rem;
-        }
-
-        .brand-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            margin-top: 15px;
-            padding: 6px 11px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.10);
-            border: 1px solid rgba(255,255,255,0.16);
-            color: #FFFFFF;
-            font-size: 0.78rem;
-            font-weight: 700;
-        }
-
-        .brand-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--coke-red);
-            box-shadow: 0 0 0 4px rgba(244,0,9,0.16);
-        }
-
-        /* ---------- Sidebar ---------- */
-        section[data-testid="stSidebar"] {
-            background: #FFFFFF;
-            border-right: 1px solid var(--border);
-        }
-
-        section[data-testid="stSidebar"] > div {
-            padding-top: 1.15rem;
-        }
-
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {
-            color: var(--navy);
-            font-weight: 800;
-        }
-
-        .sidebar-section {
-            padding: 10px 0 6px;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 10px;
-        }
-
-        .sidebar-label {
-            color: var(--muted);
-            font-size: 0.72rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-        }
-
-        .sidebar-actions {
-            background: #F8FAFC;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 10px;
-            margin: 0 0 14px;
-        }
-
-        .sidebar-action-title {
-            color: var(--navy);
-            font-size: 0.78rem;
-            font-weight: 850;
-            margin-bottom: 2px;
-        }
-
-        .sidebar-action-help {
-            color: var(--muted);
-            font-size: 0.68rem;
-            line-height: 1.35;
-            margin-bottom: 9px;
-        }
-
-        .sidebar-actions button {
-            border-radius: 9px !important;
-            font-weight: 750 !important;
-        }
-
-        .sidebar-actions button[kind="primary"] {
-            background: var(--coke-red) !important;
-            border-color: var(--coke-red) !important;
-        }
-
-        /* ---------- Tabs ---------- */
-        button[data-baseweb="tab"] {
-            font-weight: 750 !important;
-            color: #65748B !important;
-            padding-top: 10px !important;
-            padding-bottom: 11px !important;
-        }
-
-        button[data-baseweb="tab"][aria-selected="true"] {
-            color: var(--navy) !important;
-        }
-
-        div[data-baseweb="tab-highlight"] {
-            background-color: var(--coke-red) !important;
-            height: 3px !important;
-            border-radius: 999px !important;
-        }
-
-        /* ---------- KPI cards ---------- */
-        div[data-testid="stMetric"] {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 15px 17px 14px;
-            box-shadow: var(--shadow);
-            min-height: 118px;
-        }
-
-        div[data-testid="stMetricLabel"] {
-            color: var(--muted);
-            font-size: 0.78rem;
-            font-weight: 800;
-        }
-
-        div[data-testid="stMetricValue"] {
-            color: var(--navy);
-            font-size: 1.62rem;
-            font-weight: 850;
-            letter-spacing: -0.02em;
-        }
-
-        div[data-testid="stMetricDelta"] {
-            color: var(--success);
-        }
-
-        /* ---------- Contenedores y títulos ---------- */
-        h2, h3, h4 {
-            color: var(--navy);
-        }
-
-        h3 {
-            margin-top: 0.65rem !important;
-        }
-
-        .section-label {
-            color: var(--muted);
-            font-size: 0.72rem;
-            font-weight: 850;
-            letter-spacing: 0.09em;
-            text-transform: uppercase;
-            margin: 3px 0 5px;
-        }
-
-        .section-title {
-            color: var(--navy);
-            font-size: 1.05rem;
-            font-weight: 800;
-            margin: 0 0 12px;
-        }
-
-        .info-card {
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 15px 17px;
-            box-shadow: var(--shadow);
-        }
-
-        .insight-card {
-            background: linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%);
-            border-left: 4px solid var(--coke-red);
-            border-top: 1px solid var(--border);
-            border-right: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 12px 15px;
-            margin: 6px 0 10px;
-            color: var(--ink);
-            font-size: 0.88rem;
-        }
-
-        /* ---------- Alertas ---------- */
-        div[data-testid="stAlert"] {
-            border-radius: 10px;
-            border: 1px solid var(--border);
-        }
-
-        /* ---------- Tablas ---------- */
-        div[data-testid="stDataFrame"] {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: var(--shadow);
-        }
-
-        /* ---------- Inputs ---------- */
-        div[data-baseweb="select"] > div,
-        div[data-baseweb="input"] > div {
-            border-radius: 9px;
-        }
-
-        /* ---------- Responsive ---------- */
-        @media (max-width: 900px) {
-            .app-title {
-                font-size: 1.45rem;
-            }
-            .block-container {
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
+PLOTLY_BASE = dict(
+    font=dict(family="Inter, -apple-system, sans-serif", color=CARBON, size=13),
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
 )
 
 
-# ----------------------------------------------------------------------
-# Componentes puramente presentacionales
-# ----------------------------------------------------------------------
-def render_header():
-    """Header corporativo; no contiene lógica de negocio."""
-    st.markdown(
-        """
-        <div class="app-header">
-            <div class="app-kicker">Management Dashboard · Control de gestión</div>
-            <div class="app-title">🥤 AppCMG</div>
-            <div class="app-subtitle">
-                Explorador de Contribución Marginal al detalle
-            </div>
-            <div class="brand-chip">
-                <span class="brand-dot"></span>
-                Entorno corporativo · paleta inspirada en Coca‑Cola
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_section_header(eyebrow: str, title: str):
+def aplicar_estilos():
     st.markdown(
         f"""
-        <div class="section-label">{eyebrow}</div>
-        <div class="section-title">{title}</div>
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+        html, body, [class*="css"] {{
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }}
+        .stApp {{ background-color: {CREMA}; }}
+
+        .cmg-encabezado {{ border-left: 4px solid {ROJO}; padding: 2px 0 2px 16px; margin-bottom: 6px; }}
+        .cmg-encabezado h1 {{ font-size: 1.55rem; font-weight: 700; color: {CARBON}; margin: 0; }}
+        .cmg-encabezado p {{ color: {GRIS_TEXTO}; font-size: 0.9rem; margin: 4px 0 0 0; }}
+
+        div[data-testid="stMetric"] {{
+            background: transparent; border: none;
+            border-bottom: 3px solid {ROJO}; padding: 0 2px 10px 2px;
+        }}
+        div[data-testid="stMetricLabel"] {{ color: {GRIS_TEXTO}; font-weight: 500; font-size: 0.82rem; }}
+        div[data-testid="stMetricValue"] {{ color: {CARBON}; font-weight: 700; }}
+
+        .cmg-panel-titulo {{ font-weight: 600; color: {CARBON}; font-size: 1.02rem; margin-bottom: 1px; }}
+        .cmg-panel-caption {{ color: {GRIS_TEXTO}; font-size: 0.83rem; margin-bottom: 8px; }}
+        .cmg-divisor {{ border: none; border-top: 1px solid {GRIS_BORDE}; margin: 26px 0 16px 0; }}
+
+        .cmg-badge {{ display:inline-block; padding: 2px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; vertical-align: middle; }}
+        .cmg-badge-p {{ background: rgba(30,138,68,0.12); color: {VERDE}; }}
+        .cmg-badge-r {{ background: rgba(184,144,46,0.18); color: {DORADO}; }}
+        .cmg-badge-x {{ background: rgba(107,107,107,0.12); color: {GRIS_TEXTO}; }}
+
+        [data-testid="stSidebar"] {{ background-color: {BLANCO}; border-right: 1px solid {GRIS_BORDE}; }}
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {{ color: {CARBON}; font-weight: 600; }}
+        .cmg-marca {{ font-size: 1.15rem; font-weight: 700; color: {CARBON}; border-bottom: 3px solid {ROJO}; display:inline-block; padding-bottom: 4px; }}
+        [data-baseweb="tag"] {{ background-color: {ROJO} !important; }}
+
+        button[data-baseweb="tab"] {{ font-weight: 600; color: {GRIS_TEXTO}; }}
+        button[data-baseweb="tab"][aria-selected="true"] {{ color: {ROJO}; }}
+        div[data-baseweb="tab-highlight"] {{ background-color: {ROJO} !important; }}
+
+        div[data-testid="stAlert"] {{ border-radius: 8px; }}
+        [data-testid="stDataFrame"] {{ border: 1px solid {GRIS_BORDE}; border-radius: 6px; }}
+        [data-testid="stSpinner"] {{ color: {CARBON}; font-weight: 500; }}
+        .stButton > button, .stDownloadButton > button {{ border-radius: 6px; font-weight: 600; }}
+
+        @media (max-width: 640px) {{
+            div[data-testid="column"] {{ width: 100% !important; flex: 1 1 100% !important; }}
+        }}
+        </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_kpi_label(text: str):
-    st.markdown(
-        f'<div class="section-label" style="margin-bottom:4px;">{text}</div>',
-        unsafe_allow_html=True,
+def titulo_panel(titulo, subtitulo=None):
+    st.markdown(f'<div class="cmg-panel-titulo">{titulo}</div>', unsafe_allow_html=True)
+    if subtitulo:
+        st.markdown(f'<div class="cmg-panel-caption">{subtitulo}</div>', unsafe_allow_html=True)
+
+
+def divisor():
+    st.markdown('<hr class="cmg-divisor">', unsafe_allow_html=True)
+
+
+def badge_tipo_prod(tipo):
+    clase = {"P": "cmg-badge-p", "R": "cmg-badge-r"}.get(tipo, "cmg-badge-x")
+    return f'<span class="cmg-badge {clase}">{tipo}</span>'
+
+
+def _hex_a_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+
+_ROJO_RGB, _DORADO_RGB, _VERDE_RGB = _hex_a_rgb(ROJO), _hex_a_rgb(DORADO), _hex_a_rgb(VERDE)
+
+
+def _lerp(c1, c2, t):
+    return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
+
+
+def _color_semaforo(valor, vmin, vmax):
+    """Color relativo (rojo->dorado->verde) del valor DENTRO de esta tabla puntual.
+    No es un benchmark de negocio: solo ordena visualmente lo que ya está en pantalla."""
+    if pd.isna(valor) or vmax == vmin:
+        return ""
+    t = max(0.0, min(1.0, (valor - vmin) / (vmax - vmin)))
+    if t < 0.5:
+        r, g, b = _lerp(_ROJO_RGB, _DORADO_RGB, t / 0.5)
+    else:
+        r, g, b = _lerp(_DORADO_RGB, _VERDE_RGB, (t - 0.5) / 0.5)
+    return f"background-color: rgba({r},{g},{b},0.30)"
+
+
+def estilo_resumen(df):
+    """Formatea $ / % / enteros y colorea CM_% en forma relativa. No cambia ningún valor."""
+    fmt = {}
+    for col in ("Facturacion_Neta", "CM_pesos"):
+        if col in df.columns:
+            fmt[col] = "$ {:,.0f}"
+    for col in ("Cajas_Fisicas", "Clientes"):
+        if col in df.columns:
+            fmt[col] = "{:,.0f}"
+    if "CM_%" in df.columns:
+        fmt["CM_%"] = "{:,.1f}%"
+    styler = df.style.format(fmt, na_rep="—")
+    if "CM_%" in df.columns and df["CM_%"].notna().any():
+        vmin, vmax = df["CM_%"].min(), df["CM_%"].max()
+        styler = styler.map(lambda v: _color_semaforo(v, vmin, vmax), subset=["CM_%"])
+    return styler
+
+
+def estilo_cascada(df_cascada):
+    ultimo = df_cascada.index[-1]
+
+    def _fila(row):
+        if row.name == ultimo:
+            return [f"font-weight:700; color:{CARBON}; border-top:2px solid {CARBON};"] * len(row)
+        color = ROJO if row["Monto"] < 0 else GRIS_TEXTO
+        return [f"color:{color}"] * len(row)
+
+    return df_cascada.style.format({"Monto": "$ {:,.0f}"}, na_rep="—").apply(_fila, axis=1)
+
+
+def boton_descarga(df, nombre_archivo, label="⬇️ Descargar CSV"):
+    st.download_button(
+        label=label,
+        data=df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=nombre_archivo,
+        mime="text/csv",
+        type="primary",
     )
 
 
+def fig_tendencia_mensual(por_mes):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=por_mes["Mes"], y=por_mes["Facturacion Neta"],
+        mode="lines+markers", name="Facturación Neta",
+        line=dict(color=CARBON, width=2.5), marker=dict(size=6),
+    ))
+    fig.add_trace(go.Scatter(
+        x=por_mes["Mes"], y=por_mes["Contribución Marginal"],
+        mode="lines+markers", name="Contribución Marginal",
+        line=dict(color=ROJO, width=2.5), marker=dict(size=6),
+        fill="tozeroy", fillcolor="rgba(228,3,46,0.08)",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=320, hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
+        margin=dict(l=8, r=8, t=36, b=8),
+    )
+    return fig
+
+
+def fig_donut(df, categoria, valor, top_n=6):
+    d = df[[categoria, valor]].copy().sort_values(valor, ascending=False)
+    if len(d) > top_n:
+        resto = d.iloc[top_n:][valor].sum()
+        d = pd.concat([d.iloc[:top_n], pd.DataFrame({categoria: ["Otros"], valor: [resto]})], ignore_index=True)
+    fig = go.Figure(go.Pie(
+        labels=d[categoria], values=d[valor], hole=0.55,
+        marker=dict(colors=PALETA_CATEGORICA, line=dict(color=BLANCO, width=2)),
+        texttemplate="%{label}: %{percent}", textposition="outside",
+        hovertemplate="%{label}<br>$ %{value:,.0f} (%{percent})<extra></extra>",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(height=320, showlegend=False, margin=dict(l=40, r=40, t=20, b=20))
+    return fig
+
+
+def fig_cascada(df_cascada):
+    n = len(df_cascada)
+    medidas = ["absolute"] + ["relative"] * (n - 2) + ["total"]
+    fig = go.Figure(go.Waterfall(
+        orientation="v", measure=medidas,
+        x=df_cascada["Concepto"], y=df_cascada["Monto"],
+        text=[f"$ {v:,.0f}" for v in df_cascada["Monto"]], textposition="outside",
+        connector=dict(line=dict(color=GRIS_BORDE, width=1)),
+        increasing=dict(marker=dict(color=VERDE)),
+        decreasing=dict(marker=dict(color=ROJO)),
+        totals=dict(marker=dict(color=CARBON)),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=380, showlegend=False,
+        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
+        xaxis=dict(tickangle=-15),
+        margin=dict(l=8, r=8, t=30, b=8),
+    )
+    return fig
+
+
+def fig_top_clientes(por_cliente, columna_valor, top_n=10):
+    d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor)
+    etiqueta = d["Nom.Cliente"].fillna(d["Cliente"].astype(str))
+    fig = go.Figure(go.Bar(
+        x=d[columna_valor], y=etiqueta, orientation="h",
+        marker=dict(color=ROJO),
+        text=[f"$ {v:,.0f}" for v in d[columna_valor]], textposition="outside",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(280, 34 * len(d)),
+        xaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ "),
+        margin=dict(l=10, r=70, t=10, b=10),
+    )
+    return fig
+
+
+aplicar_estilos()
+
+CONFIG_CHART = {"displayModeBar": False}
+
+
 # ----------------------------------------------------------------------
-# Carga de datos + cálculo de CM
+# Carga de datos + cálculo de CM  (sin cambios respecto del original)
 # ----------------------------------------------------------------------
 @st.cache_data(show_spinner="Leyendo y limpiando el archivo...")
 def cargar(archivo) -> dict[str, pd.DataFrame]:
@@ -365,76 +279,36 @@ def calcular(_datos: dict, pallets_por_camion: int) -> pd.DataFrame:
     return calcular_cmg(_datos, pallets_por_camion=pallets_por_camion)
 
 
-def clear_filters():
-    """Limpia únicamente los filtros visuales; conserva archivo, datos y cálculo."""
-    # No asignamos meses_disp aquí porque los callbacks/botones pueden
-    # ejecutarse antes de que esa variable exista en el rerun actual.
-    # Al eliminar las claves, los widgets vuelven a inicializarse con
-    # sus valores por defecto en el siguiente rerun.
-    for key in ("filtro_mes", "filtro_locacion", "filtro_canal", "articulo_sel"):
-        st.session_state.pop(key, None)
-
-
-def refresh_data():
-    """Fuerza la recarga visual y de datos limpiando únicamente las cachés de Streamlit."""
-    cargar.clear()
-    calcular.clear()
-
-
-render_header()
-
-st.sidebar.markdown(
+st.markdown(
     """
-    <div class="sidebar-actions">
-        <div class="sidebar-action-title">Control del dashboard</div>
-        <div class="sidebar-action-help">
-            Actualizá los datos o limpiá los filtros sin volver a cargar el Excel.
-        </div>
+    <div class="cmg-encabezado">
+        <h1>🥤 AppCMG — Contribución Marginal al detalle</h1>
+        <p>Explorá la Contribución Marginal de la operación por artículo, cliente, canal y locación.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-col_refresh, col_reset = st.sidebar.columns(2)
-with col_refresh:
-    if st.button("↻ Actualizar", use_container_width=True, type="primary", help="Limpia la caché de datos y vuelve a calcular la Contribución Marginal."):
-        refresh_data()
-        st.rerun()
-
-with col_reset:
-    if st.button("✕ Limpiar filtros", use_container_width=True, help="Quita Locación y Canal, recupera todos los meses y mantiene el archivo cargado."):
-        clear_filters()
-        st.rerun()
-
+st.sidebar.markdown('<span class="cmg-marca">AppCMG</span>', unsafe_allow_html=True)
 archivo = st.sidebar.file_uploader("Subí el archivo AppCMG.xlsx", type=["xlsx"])
 
 if archivo is None:
-    st.markdown(
-        """
-        <div class="info-card">
-            <div class="section-label">Inicio</div>
-            <h3 style="margin:0 0 6px;">Cargá el archivo para comenzar</h3>
-            <div style="color:#6B778C;">
-                El modelo espera las 7 hojas: VENTA, Maestro Artículos, Receta,
-                MO, DatosxLocacion, FletesT0 y Exhibición.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    titulo_panel("Subí el archivo para empezar")
+    st.info(
+        "⬅️ Subí el archivo Excel desde la barra lateral. Tiene que tener estas 7 hojas: "
+        "**VENTA**, **Maestro Artículos**, **Receta**, **MO**, **DatosxLocacion**, **FletesT0** y **Exhibición**."
     )
-    st.info("Usá la barra lateral para cargar el Excel y activar el análisis.")
     st.stop()
 
 datos = cargar(archivo)
 
-st.sidebar.markdown('<div class="sidebar-label">Supuestos</div>', unsafe_allow_html=True)
+st.sidebar.header("Supuestos")
 pallets_por_camion = st.sidebar.number_input(
     "Pallets por camión (Flete T1)",
     min_value=1,
     value=PALLETS_POR_CAMION,
     step=1,
-    key="pallets_por_camion",
-    help="Supuesto utilizado por el cálculo del Flete T1.",
+    help="Cantidad de pallets que entran en un camión. Se usa para prorratear el costo de Flete T1 entre las unidades transportadas.",
 )
 
 venta_cm = calcular(datos, pallets_por_camion)
@@ -445,9 +319,7 @@ dxl = datos["datosxlocacion"]
 fletest0 = datos["fletest0"]
 
 n_sin_costeo = (~venta_cm["CM_calculada"]).sum()
-
-# Estado de carga más compacto y corporativo.
-st.success(f"Archivo cargado correctamente · {len(venta_cm):,} filas de venta.")
+st.success(f"Archivo cargado: {len(venta_cm):,} filas de venta.")
 if n_sin_costeo:
     tipos_sin_costeo = sorted(
         venta_cm.loc[~venta_cm["CM_calculada"], "Tipo de Prod."].dropna().unique()
@@ -459,9 +331,9 @@ if n_sin_costeo:
     )
 
 # ----------------------------------------------------------------------
-# Filtros globales (barra lateral)
+# Filtros globales (barra lateral) — sin cambios
 # ----------------------------------------------------------------------
-st.sidebar.markdown('<div class="sidebar-label">Filtros globales</div>', unsafe_allow_html=True)
+st.sidebar.header("Filtros")
 
 meses_disp = sorted(venta_cm["Mes"].dropna().unique())
 meses_sel = st.sidebar.multiselect(
@@ -469,17 +341,12 @@ meses_sel = st.sidebar.multiselect(
     options=meses_disp,
     default=meses_disp,
     format_func=lambda m: pd.Timestamp(m).strftime("%Y-%m"),
-    key="filtro_mes",
 )
 locaciones_sel = st.sidebar.multiselect(
-    "Locación",
-    options=sorted(venta_cm["Locación"].dropna().unique()),
-    key="filtro_locacion",
+    "Locación", options=sorted(venta_cm["Locación"].dropna().unique())
 )
 canales_sel = st.sidebar.multiselect(
-    "Canal",
-    options=sorted(venta_cm["Canal"].dropna().unique()),
-    key="filtro_canal",
+    "Canal", options=sorted(venta_cm["Canal"].dropna().unique())
 )
 
 venta_f = venta_cm[venta_cm["Mes"].isin(meses_sel)]
@@ -508,111 +375,64 @@ def resumen_cm(df: pd.DataFrame, agrupar_por) -> pd.DataFrame:
 # Tabs
 # ----------------------------------------------------------------------
 tab_resumen, tab_articulo, tab_crudo = st.tabs(
-    ["📊 Resumen ejecutivo", "🔎 Detalle por artículo", "🗂️ Datos crudos"]
+    ["📊 Resumen general", "🔎 Detalle por artículo", "🗂️ Datos crudos"]
 )
 
 # --- Tab 1: Resumen general ------------------------------------------------
 with tab_resumen:
+    c1, c2, c3, c4 = st.columns(4)
     fact_total = venta_f["Facturacion Neta"].sum()
     cm_total = venta_cm_f["CM ($)"].sum()
+    c1.metric(
+        "Facturación Neta", f"$ {fact_total:,.0f}",
+        help="Suma de la Facturación Neta de todas las filas filtradas, incluyendo artículos sin regla de costeo definida.",
+    )
+    c2.metric(
+        "Contribución Marginal", f"$ {cm_total:,.0f}",
+        help="Suma de la Contribución Marginal solo de las filas con regla de costeo definida (Tipo P o R).",
+    )
     cm_pct = cm_total / venta_cm_f["Facturacion Neta"].sum() * 100 if len(venta_cm_f) else 0
-    clientes_total = venta_f["Cliente"].nunique()
+    c3.metric(
+        "CM % (ponderado)", f"{cm_pct:,.1f}%",
+        help="CM total dividida por la Facturación Neta de las filas con CM calculada (no por el total general de la primera tarjeta).",
+    )
+    c4.metric(
+        "Clientes distintos", f"{venta_f['Cliente'].nunique():,}",
+        help="Clientes únicos en las filas filtradas (todas, no solo las que tienen CM calculada).",
+    )
 
-    render_section_header("Executive overview", "Indicadores principales")
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Facturación Neta", f"$ {fact_total:,.0f}")
-        st.caption("Venta neta dentro de los filtros activos.")
-    with c2:
-        st.metric("Contribución Marginal", f"$ {cm_total:,.0f}")
-        st.caption("CM calculada para filas con costeo disponible.")
-    with c3:
-        st.metric("CM % (ponderado)", f"{cm_pct:,.1f}%")
-        st.caption("CM sobre facturación de las filas costeadas.")
-    with c4:
-        st.metric("Clientes distintos", f"{clientes_total:,}")
-        st.caption("Clientes únicos en el universo filtrado.")
-
-    # Visualización temporal: barras separadas para comparación y línea de CM.
-    render_section_header("Tendencia", "Facturación neta y Contribución Marginal por mes")
+    divisor()
+    titulo_panel("Tendencia mensual", "Evolución de la Facturación Neta y la Contribución Marginal, mes a mes.")
     por_mes = venta_f.groupby("Mes", as_index=False)["Facturacion Neta"].sum()
     por_mes["Contribución Marginal"] = venta_cm_f.groupby("Mes")["CM ($)"].sum().values
     por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
+    if por_mes.empty:
+        st.info("No hay datos para los filtros seleccionados.")
+    else:
+        st.plotly_chart(fig_tendencia_mensual(por_mes), width="stretch", theme=None, config=CONFIG_CHART)
 
-    por_mes_largo = por_mes.melt(id_vars="Mes", var_name="Concepto", value_name="Monto")
-    st.bar_chart(
-        por_mes_largo,
-        x="Mes",
-        y="Monto",
-        color="Concepto",
-        stack=False,
-        height=360,
-    )
-
-    st.caption(
-        "Lectura sugerida: compará la evolución de la facturación con el nivel de CM "
-        "para detectar meses de mayor presión o generación de valor."
-    )
-
-    col_a, col_b = st.columns(2, gap="large")
+    divisor()
+    col_a, col_b = st.columns(2)
     with col_a:
-        render_section_header("Mix comercial", "Contribución por canal")
-        por_canal = resumen_cm(venta_cm_f, "Canal")
-        st.bar_chart(
-            por_canal.set_index("Canal")["CM_pesos"],
-            height=300,
-        )
-        st.caption("Ranking de CM ($) por canal. La tabla debajo conserva el detalle.")
-
-        st.dataframe(
-            por_canal,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Facturacion_Neta": st.column_config.NumberColumn(
-                    "Facturación Neta", format="$ %,.0f"
-                ),
-                "Cajas_Fisicas": st.column_config.NumberColumn(
-                    "Cajas Físicas", format="%,.0f"
-                ),
-                "CM_pesos": st.column_config.NumberColumn(
-                    "CM ($)", format="$ %,.0f"
-                ),
-                "CM_%": st.column_config.NumberColumn(
-                    "CM %", format="%.1f%%"
-                ),
-            },
-        )
-
+        titulo_panel("Contribución Marginal por Canal", "Participación de cada canal en la CM total del período filtrado.")
+        resumen_canal = resumen_cm(venta_cm_f, "Canal")
+        if resumen_canal.empty:
+            st.info("No hay datos para los filtros seleccionados.")
+        else:
+            st.plotly_chart(fig_donut(resumen_canal, "Canal", "CM_pesos"), width="stretch", theme=None, config=CONFIG_CHART)
+            with st.expander("Ver tabla completa"):
+                st.dataframe(estilo_resumen(resumen_canal), width="stretch", hide_index=True)
+                boton_descarga(resumen_canal, "cm_por_canal.csv")
     with col_b:
-        render_section_header("Cobertura geográfica", "Contribución por locación")
-        por_locacion = resumen_cm(venta_cm_f, "Locación")
-        st.bar_chart(
-            por_locacion.set_index("Locación")["CM_pesos"],
-            height=300,
-        )
-        st.caption("Ranking de CM ($) por locación. Útil para detectar concentración.")
-
-        st.dataframe(
-            por_locacion,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Facturacion_Neta": st.column_config.NumberColumn(
-                    "Facturación Neta", format="$ %,.0f"
-                ),
-                "Cajas_Fisicas": st.column_config.NumberColumn(
-                    "Cajas Físicas", format="%,.0f"
-                ),
-                "CM_pesos": st.column_config.NumberColumn(
-                    "CM ($)", format="$ %,.0f"
-                ),
-                "CM_%": st.column_config.NumberColumn(
-                    "CM %", format="%.1f%%"
-                ),
-            },
-        )
+        titulo_panel("Contribución Marginal por Locación", "Participación de cada locación en la CM total del período filtrado.")
+        resumen_locacion = resumen_cm(venta_cm_f, "Locación")
+        if resumen_locacion.empty:
+            st.info("No hay datos para los filtros seleccionados.")
+        else:
+            st.plotly_chart(fig_donut(resumen_locacion, "Locación", "CM_pesos"), width="stretch", theme=None, config=CONFIG_CHART)
+            with st.expander("Ver tabla completa"):
+                st.dataframe(estilo_resumen(resumen_locacion), width="stretch", hide_index=True)
+                boton_descarga(resumen_locacion, "cm_por_locacion.csv")
 
 # --- Tab 2: Detalle por artículo -------------------------------------------
 with tab_articulo:
@@ -621,7 +441,6 @@ with tab_articulo:
         .drop_duplicates()
         .sort_values("Cod. Venta")
     )
-
     if articulos_disp.empty:
         st.warning("No hay artículos para los filtros seleccionados.")
         st.stop()
@@ -630,12 +449,7 @@ with tab_articulo:
         f"{row['Cod. Venta']} - {row['Descripción del material']}": row["Cod. Venta"]
         for _, row in articulos_disp.iterrows()
     }
-    elegido = st.selectbox(
-        "Elegí un artículo",
-        options=list(opciones.keys()),
-        key="articulo_sel",
-        help="La selección se actualiza automáticamente al cambiar los filtros globales.",
-    )
+    elegido = st.selectbox("Elegí un artículo", options=list(opciones.keys()))
     cod = opciones[elegido]
 
     v_art = venta_f[venta_f["Cod. Venta"] == cod]
@@ -643,11 +457,11 @@ with tab_articulo:
     tipo_prod = info_art["Tipo de Prod."].iloc[0] if not info_art.empty else "?"
     calculable = tipo_prod in ("P", "R")
 
-    render_section_header("Artículo seleccionado", f"Artículo {cod}")
-    st.caption(
-        f"Tipo de producto: {tipo_prod} · Selección actual: {elegido}"
+    st.markdown(
+        f'<span class="cmg-panel-titulo" style="font-size:1.15rem;">Artículo {cod} &nbsp;{badge_tipo_prod(tipo_prod)}</span>',
+        unsafe_allow_html=True,
     )
-
+    st.caption("P = artículo propio, R = artículo de reventa.")
     if not calculable:
         st.warning(
             f"Tipo de producto '{tipo_prod}' todavía no tiene regla de costeo "
@@ -655,28 +469,26 @@ with tab_articulo:
         )
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.metric("Facturación Neta", f"$ {v_art['Facturacion Neta'].sum():,.0f}")
-    with c2:
-        st.metric("Cajas Físicas", f"{v_art['Cajas Fisicas'].sum():,.0f}")
+    c1.metric(
+        "Facturación Neta", f"$ {v_art['Facturacion Neta'].sum():,.0f}",
+        help="Facturación neta de este artículo en el período y los filtros seleccionados.",
+    )
+    c2.metric(
+        "Cajas Físicas", f"{v_art['Cajas Fisicas'].sum():,.0f}",
+        help="Cajas físicas vendidas de este artículo en el período y los filtros seleccionados.",
+    )
     if calculable:
         cm_art = v_art["CM ($)"].sum()
         cm_pct_art = cm_art / v_art["Facturacion Neta"].sum() * 100
-        with c3:
-            st.metric("Contribución Marginal", f"$ {cm_art:,.0f}")
-        with c4:
-            st.metric("CM %", f"{cm_pct_art:,.1f}%")
+        c3.metric("Contribución Marginal", f"$ {cm_art:,.0f}")
+        c4.metric("CM %", f"{cm_pct_art:,.1f}%")
     else:
-        with c3:
-            st.metric("Contribución Marginal", "—")
-        with c4:
-            st.metric("CM %", "—")
+        c3.metric("Contribución Marginal", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
+        c4.metric("CM %", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
 
     if calculable:
-        render_section_header(
-            "Economía del producto",
-            "Cascada de Contribución Marginal",
-        )
+        divisor()
+        titulo_panel("Cascada de Contribución Marginal", "De la Facturación Neta a la Contribución Marginal, paso a paso, para este artículo.")
         cascada = v_art[COLUMNAS_CASCADA].sum()
         filas_cascada = [{"Concepto": "Facturación Neta", "Monto": cascada["Facturacion Neta"]}]
         for c in COLUMNAS_CASCADA[1:-1]:
@@ -684,26 +496,12 @@ with tab_articulo:
         filas_cascada.append({"Concepto": "= Contribución Marginal ($)", "Monto": cascada["CM ($)"]})
         df_cascada = pd.DataFrame(filas_cascada)
 
-        col_cascada, col_info = st.columns([1.5, 1], gap="large")
-        with col_cascada:
-            st.dataframe(
-                df_cascada.style.format({"Monto": "$ {:,.0f}"}),
-                use_container_width=True,
-                hide_index=True,
-            )
-        with col_info:
-            st.markdown(
-                """
-                <div class="insight-card">
-                    <strong>Cómo leer la cascada</strong><br>
-                    Partí de la Facturación Neta y observá cuánto valor consume cada
-                    componente de costo hasta llegar a la Contribución Marginal.
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+        with st.container(border=True):
+            st.plotly_chart(fig_cascada(df_cascada), width="stretch", theme=None, config=CONFIG_CHART)
+            st.dataframe(estilo_cascada(df_cascada), width="stretch", hide_index=True)
 
-    render_section_header("Rentabilidad y cobertura", "Detalle por cliente")
+    divisor()
+    titulo_panel("Detalle por Cliente")
     cols_cliente = ["Cliente", "Nom.Cliente", "Canal", "Locación"]
     agg_cliente = dict(
         Cajas_Fisicas=("Cajas Fisicas", "sum"), Facturacion_Neta=("Facturacion Neta", "sum")
@@ -715,98 +513,65 @@ with tab_articulo:
         por_cliente["CM_%"] = (por_cliente["CM_pesos"] / por_cliente["Facturacion_Neta"] * 100).round(1)
     por_cliente = por_cliente.sort_values("Facturacion_Neta", ascending=False)
 
-    st.dataframe(
-        por_cliente,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Facturacion_Neta": st.column_config.NumberColumn(
-                "Facturación Neta", format="$ %,.0f"
-            ),
-            "Cajas_Fisicas": st.column_config.NumberColumn(
-                "Cajas Físicas", format="%,.0f"
-            ),
-            "CM_pesos": st.column_config.NumberColumn(
-                "CM ($)", format="$ %,.0f"
-            ),
-            "CM_%": st.column_config.NumberColumn(
-                "CM %", format="%.1f%%"
-            ),
-        },
-    )
+    columna_top = "CM_pesos" if calculable else "Facturacion_Neta"
+    etiqueta_top = "Contribución Marginal" if calculable else "Facturación Neta"
+    st.caption(f"Top {min(10, len(por_cliente))} clientes por {etiqueta_top}")
+    st.plotly_chart(fig_top_clientes(por_cliente, columna_top), width="stretch", theme=None, config=CONFIG_CHART)
 
-    col_a, col_b = st.columns(2, gap="large")
+    with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
+        st.dataframe(estilo_resumen(por_cliente) if calculable else por_cliente, width="stretch", hide_index=True)
+        boton_descarga(por_cliente, f"detalle_clientes_{cod}.csv")
+
+    divisor()
+    col_a, col_b = st.columns(2)
     with col_a:
-        render_section_header("Cobertura", "Resumen por locación")
-        loc_art = (
-            resumen_cm(v_art, "Locación") if calculable
-            else v_art.groupby("Locación", as_index=False)["Facturacion Neta"].sum()
-        )
-        if calculable:
-            st.bar_chart(
-                loc_art.set_index("Locación")["CM_pesos"],
-                height=280,
-            )
+        titulo_panel("Resumen por Locación")
         st.dataframe(
-            loc_art,
-            use_container_width=True,
-            hide_index=True,
+            estilo_resumen(resumen_cm(v_art, "Locación")) if calculable
+            else v_art.groupby("Locación", as_index=False)["Facturacion Neta"].sum(),
+            width="stretch", hide_index=True,
         )
-
     with col_b:
-        render_section_header("Mix comercial", "Resumen por canal")
-        canal_art = (
-            resumen_cm(v_art, "Canal") if calculable
-            else v_art.groupby("Canal", as_index=False)["Facturacion Neta"].sum()
-        )
-        if calculable:
-            st.bar_chart(
-                canal_art.set_index("Canal")["CM_pesos"],
-                height=280,
-            )
+        titulo_panel("Resumen por Canal")
         st.dataframe(
-            canal_art,
-            use_container_width=True,
-            hide_index=True,
+            estilo_resumen(resumen_cm(v_art, "Canal")) if calculable
+            else v_art.groupby("Canal", as_index=False)["Facturacion Neta"].sum(),
+            width="stretch", hide_index=True,
         )
 
     st.divider()
     with st.expander("Ver los insumos de costo que alimentan este cálculo"):
         if tipo_prod == "P":
             st.caption("Artículo propio (P) → composición por insumos, hoja Receta:")
-            st.dataframe(receta[receta["Cod. Venta"] == cod], use_container_width=True, hide_index=True)
+            st.dataframe(receta[receta["Cod. Venta"] == cod], width="stretch", hide_index=True)
             mo_art = mo[mo["Cod. Venta"] == cod]
             if not mo_art.empty:
                 st.caption("Mano de Obra (hoja MO):")
-                st.dataframe(mo_art, use_container_width=True, hide_index=True)
+                st.dataframe(mo_art, width="stretch", hide_index=True)
         elif tipo_prod == "R":
             st.caption("Artículo de reventa (R) → costo de compra, hoja Receta:")
             st.dataframe(
                 receta[receta["Cod. Venta"] == cod][
                     ["Mes", "Costo Compra ($)", "Desperdicio PT (%)", "Desperdicio PT ($)"]
                 ],
-                use_container_width=True,
-                hide_index=True,
+                width="stretch", hide_index=True,
             )
             st.caption("Flete T0 (ir a buscar el producto), hoja FletesT0:")
-            st.dataframe(fletest0[fletest0["Cod. Venta"] == cod], use_container_width=True, hide_index=True)
+            st.dataframe(fletest0[fletest0["Cod. Venta"] == cod], width="stretch", hide_index=True)
 
         st.caption("Datos por Locación aplicables (hoja DatosxLocacion):")
         st.dataframe(
             dxl[dxl["Locación"].isin(v_art["Locación"].unique())],
-            use_container_width=True,
-            hide_index=True,
+            width="stretch", hide_index=True,
         )
 
 # --- Tab 3: Datos crudos ----------------------------------------------------
 with tab_crudo:
-    render_section_header("Modelo de datos", "Explorador de datos crudos")
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
-    hoja = st.selectbox(
-        "Elegí una hoja",
-        options=list(opciones_hojas.keys()),
-        key="hoja_sel",
-    )
-    st.dataframe(opciones_hojas[hoja], use_container_width=True)
-    filas, columnas = opciones_hojas[hoja].shape
-    st.caption(f"{filas:,} filas × {columnas:,} columnas")
+    hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
+    df_hoja = opciones_hojas[hoja]
+    st.dataframe(df_hoja, width="stretch")
+    col_info, col_btn = st.columns([3, 1])
+    col_info.caption(f"{df_hoja.shape[0]:,} filas x {df_hoja.shape[1]} columnas")
+    with col_btn:
+        boton_descarga(df_hoja, f"{str(hoja).replace(' ', '_')}.csv")
