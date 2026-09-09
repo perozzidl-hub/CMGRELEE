@@ -246,11 +246,19 @@ def fig_cascada(df_cascada):
 
 
 def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
-    d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor, ascending=False)
-    etiqueta = d["Nom.Cliente"].fillna(d["Cliente"].astype(str)).astype(str)
-    # Nombres muy largos se truncan SOLO para la etiqueta del gráfico (la tabla de abajo
-    # sigue mostrando el nombre completo) — si no, un nombre largo empuja todo el margen.
-    etiqueta = etiqueta.where(etiqueta.str.len() <= 28, etiqueta.str.slice(0, 27) + "…")
+    d = por_cliente.nlargest(top_n, columna_valor).sort_values(columna_valor, ascending=False).copy()
+
+    # Etiqueta SIEMPRE "código - nombre": un mismo nombre con distinto código
+    # es una boca distinta y tiene que verse como cliente distinto.
+    nombres = d["Nom.Cliente"].fillna("").astype(str)
+    codigos = d["Cliente"].astype(str)
+    etiqueta = (codigos + " - " + nombres)
+    # Truncar el nombre (no el código) para que el margen izquierdo no se dispare.
+    max_largo = 32
+    etiqueta = etiqueta.where(
+        etiqueta.str.len() <= max_largo,
+        codigos + " - " + nombres.str.slice(0, max_largo - len(codigos) - 4) + "…",
+    )
 
     if titulo_eje_x is None:
         titulo_eje_x = "Contribución Marginal ($)" if columna_valor == "CM_pesos" else "Facturación Neta ($)"
