@@ -360,7 +360,19 @@ CONFIG_CHART = {"displayModeBar": False}
 # ----------------------------------------------------------------------
 @st.cache_data(show_spinner="Leyendo, identificando y limpiando las fuentes...")
 def cargar(archivos) -> dict[str, pd.DataFrame]:
-    """Compatible con un único Excel integral o con múltiples Excel complementarios."""
+    """Compatible con un único Excel integral o con múltiples Excel complementarios.
+
+    Streamlit devuelve SIEMPRE una lista cuando ``accept_multiple_files=True``,
+    incluso si el usuario sube un solo archivo. Para mantener compatibilidad
+    con el loader histórico (que esperaba un archivo individual), cuando hay
+    una sola fuente la desempaquetamos antes de llamar a ``cargar_todo``.
+    El loader V2 acepta ambas formas, por lo que esto también funciona con la
+    arquitectura multiarchivo nueva.
+    """
+    if isinstance(archivos, (list, tuple)):
+        if len(archivos) == 1:
+            return cargar_todo(archivos[0])
+        return cargar_todo(list(archivos))
     return cargar_todo(archivos)
 
 
