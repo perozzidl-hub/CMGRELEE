@@ -679,6 +679,256 @@ def fig_mix_productos(productos, top_n=12):
     return fig
 
 
+
+# ----------------------------------------------------------------------
+# FASE 3 — COSTOS Y EXPLICACIÓN DE VARIACIONES
+# ----------------------------------------------------------------------
+COSTOS_CMG = [c for c in COLUMNAS_CASCADA if c not in ("Facturacion Neta", "CM ($)")]
+
+
+def _suma_num(df: pd.DataFrame, columna: str) -> float:
+    if df is None or df.empty or columna not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df[columna], errors="coerce").fillna(0).sum())
+
+
+def resumen_costos_periodo(df_cm: pd.DataFrame) -> pd.DataFrame:
+    """Estructura de costos del alcance costeado, en $ / caja / % facturación."""
+    fact = _suma_num(df_cm, "Facturacion Neta")
+    cajas = _suma_num(df_cm, "Cajas Fisicas")
+    filas = []
+    for c in COSTOS_CMG:
+        costo = _suma_num(df_cm, c)
+        filas.append({
+            "Concepto": c.replace("Costo ", ""),
+            "Columna": c,
+            "Costo": costo,
+            "Costo_Caja": costo / cajas if cajas else float("nan"),
+            "%_Facturacion": costo / fact * 100 if fact else float("nan"),
+        })
+    return pd.DataFrame(filas).sort_values("Costo", ascending=False)
+
+
+
+def fig_estructura_costos(costos: pd.DataFrame, top_n=15):
+    """Composición actual del costo en barras horizontales."""
+    if costos is None or costos.empty:
+        return go.Figure()
+    d = costos.copy().nlargest(top_n, "Costo").sort_values("Costo", ascending=True)
+    fig = go.Figure(go.Bar(
+        x=d["Costo"], y=d["Concepto"], orientation="h", marker=dict(color=CARBON),
+        customdata=d[["Costo_Caja", "%_Facturacion"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{y}</b><br>Costo: $ %{x:,.0f}<br>"
+            "Costo/Caja: $ %{customdata[0]:,.2f}<br>"
+            "% Facturación: %{customdata[1]:.2f}%<extra></extra>"
+        ),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(410, 30 * len(d)), showlegend=False,
+        xaxis=dict(title="Costo total ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=10, r=20, t=15, b=45),
+    )
+    return fig
+
+def comparar_costos(df_actual_cm: pd.DataFrame, df_anterior_cm: pd.DataFrame) -> pd.DataFrame:
+    """Compara cada componente. Impacto_CM > 0 mejora CM; < 0 la deteriora."""
+    fact_a = _suma_num(df_actual_cm, "Facturacion Neta")
+    fact_p = _suma_num(df_anterior_cm, "Facturacion Neta")
+    cajas_a = _suma_num(df_actual_cm, "Cajas Fisicas")
+    cajas_p = _suma_num(df_anterior_cm, "Cajas Fisicas")
+    filas = []
+    for c in COSTOS_CMG:
+        actual = _suma_num(df_actual_cm, c)
+        anterior = _suma_num(df_anterior_cm, c)
+        variacion = actual - anterior
+        filas.append({
+            "Concepto": c.replace("Costo ", ""),
+            "Columna": c,
+            "Actual": actual,
+            "Anterior": anterior,
+            "Variacion_Costo": variacion,
+            # Si el costo sube, resta CM; si baja, libera CM.
+            "Impacto_CM": -variacion,
+            "Actual_Caja": actual / cajas_a if cajas_a else float("nan"),
+            "Anterior_Caja": anterior / cajas_p if cajas_p else float("nan"),
+            "Var_Caja_%": _delta_pct(actual / cajas_a if cajas_a else float("nan"), anterior / cajas_p if cajas_p else float("nan")),
+            "Actual_%Fact": actual / fact_a * 100 if fact_a else float("nan"),
+            "Anterior_%Fact": anterior / fact_p * 100 if fact_p else float("nan"),
+            "Var_pp": (actual / fact_a * 100 - anterior / fact_p * 100) if fact_a and fact_p else float("nan"),
+        })
+    return pd.DataFrame(filas)
+
+
+def fig_bridge_variacion_cm(df_actual_cm: pd.DataFrame, df_anterior_cm: pd.DataFrame, top_n_costos=9):
+    """Bridge exacto: CM anterior + ΔFacturación - ΔCostos = CM actual.
+
+    Es una reconciliación aritmética, no una descomposición causal precio/volumen/mix.
+    """
+    cm_prev = _suma_num(df_anterior_cm, "CM ($)")
+    cm_act = _suma_num(df_actual_cm, "CM ($)")
+    fact_prev = _suma_num(df_anterior_cm, "Facturacion Neta")
+    fact_act = _suma_num(df_actual_cm, "Facturacion Neta")
+    delta_fact = fact_act - fact_prev
+    comp = comparar_costos(df_actual_cm, df_anterior_cm)
+    comp = comp.sort_values("Impacto_CM", key=lambda x: x.abs(), ascending=False)
+
+    principales = comp.head(top_n_costos).copy()
+    otros = comp.iloc[top_n_costos:]["Impacto_CM"].sum() if len(comp) > top_n_costos else 0.0
+
+    conceptos = ["CM anterior", "Δ Facturación"]
+    valores = [cm_prev, delta_fact]
+    medidas = ["absolute", "relative"]
+    for _, r in principales.iterrows():
+        conceptos.append(r["Concepto"])
+        valores.append(r["Impacto_CM"])
+        medidas.append("relative")
+    if abs(otros) > 0.5:
+        conceptos.append("Otros costos")
+        valores.append(otros)
+        medidas.append("relative")
+    conceptos.append("CM actual")
+    valores.append(cm_act)
+    medidas.append("total")
+
+    fig = go.Figure(go.Waterfall(
+        orientation="v", measure=medidas, x=conceptos, y=valores,
+        text=[fmt_pesos(v) for v in valores], textposition="outside", cliponaxis=False,
+        connector=dict(line=dict(color=GRIS_BORDE, width=1)),
+        increasing=dict(marker=dict(color=VERDE)),
+        decreasing=dict(marker=dict(color=ROJO)),
+        totals=dict(marker=dict(color=CARBON)),
+        hovertemplate="%{x}<br>$ %{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=470, showlegend=False,
+        yaxis=dict(title="Impacto sobre CM ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        xaxis=dict(tickangle=-25, automargin=True),
+        margin=dict(l=10, r=10, t=35, b=95),
+    )
+    return fig
+
+
+def fig_impacto_costos(comp: pd.DataFrame, top_n=12):
+    """Ranking de componentes según cuánto ayudaron/perjudicaron la variación de CM."""
+    if comp.empty:
+        return go.Figure()
+    d = comp.copy()
+    d = d.reindex(d["Impacto_CM"].abs().sort_values(ascending=False).index).head(top_n)
+    d = d.sort_values("Impacto_CM")
+    colores = [VERDE if v >= 0 else ROJO for v in d["Impacto_CM"]]
+    fig = go.Figure(go.Bar(
+        x=d["Impacto_CM"], y=d["Concepto"], orientation="h", marker=dict(color=colores),
+        customdata=d[["Actual", "Anterior", "Variacion_Costo"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{y}</b><br>Impacto sobre CM: $ %{x:,.0f}<br>"
+            "Costo actual: $ %{customdata[0]:,.0f}<br>"
+            "Costo anterior: $ %{customdata[1]:,.0f}<br>"
+            "Δ costo: $ %{customdata[2]:,.0f}<extra></extra>"
+        ),
+    ))
+    fig.add_vline(x=0, line_width=1, line_color=CARBON)
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(360, 32 * len(d)), showlegend=False,
+        xaxis=dict(title="Impacto sobre la variación de CM ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=10, r=25, t=20, b=45),
+    )
+    return fig
+
+
+def fig_costos_unitarios(comp: pd.DataFrame, top_n=10):
+    """Costo por caja actual vs anterior, priorizando componentes materiales."""
+    if comp.empty:
+        return go.Figure()
+    d = comp.copy()
+    d["materialidad"] = d[["Actual", "Anterior"]].abs().max(axis=1)
+    d = d.nlargest(top_n, "materialidad").sort_values("Actual_Caja", ascending=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d["Anterior_Caja"], y=d["Concepto"], orientation="h", name="Período anterior",
+        marker=dict(color="#B9B9B9"),
+        hovertemplate="%{y}<br>Anterior: $ %{x:,.2f}/caja<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=d["Actual_Caja"], y=d["Concepto"], orientation="h", name="Período actual",
+        marker=dict(color=ROJO),
+        hovertemplate="%{y}<br>Actual: $ %{x:,.2f}/caja<extra></extra>",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        barmode="group", height=max(390, 34 * len(d)),
+        xaxis=dict(title="Costo por Caja Física", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.2f"),
+        yaxis=dict(title=None, automargin=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=20, t=45, b=45),
+    )
+    return fig
+
+
+def fig_mix_costos(comp: pd.DataFrame, top_n=10):
+    """Peso de cada costo sobre facturación: actual vs anterior."""
+    if comp.empty:
+        return go.Figure()
+    d = comp.copy()
+    d["materialidad"] = d[["Actual_%Fact", "Anterior_%Fact"]].abs().max(axis=1)
+    d = d.nlargest(top_n, "materialidad").sort_values("Actual_%Fact", ascending=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d["Anterior_%Fact"], y=d["Concepto"], orientation="h", name="Período anterior",
+        marker=dict(color="#B9B9B9"),
+        hovertemplate="%{y}<br>Anterior: %{x:.2f}% de facturación<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=d["Actual_%Fact"], y=d["Concepto"], orientation="h", name="Período actual",
+        marker=dict(color=CARBON),
+        hovertemplate="%{y}<br>Actual: %{x:.2f}% de facturación<extra></extra>",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        barmode="group", height=max(390, 34 * len(d)),
+        xaxis=dict(title="Costo / Facturación Neta", gridcolor=GRIS_BORDE, ticksuffix="%"),
+        yaxis=dict(title=None, automargin=True),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=20, t=45, b=45),
+    )
+    return fig
+
+
+def fig_tendencia_eficiencia(df_cm: pd.DataFrame):
+    """Evolución mensual de Costo/Caja, CM/Caja y CM %."""
+    if df_cm is None or df_cm.empty:
+        return go.Figure()
+    d = df_cm.groupby("Mes", as_index=False).agg(
+        Facturacion_Neta=("Facturacion Neta", "sum"),
+        Cajas_Fisicas=("Cajas Fisicas", "sum"),
+        Costo_Total=("Costo Total", "sum"),
+        CM_pesos=("CM ($)", "sum"),
+    )
+    cajas = pd.to_numeric(d["Cajas_Fisicas"], errors="coerce").replace(0, float("nan"))
+    fact = pd.to_numeric(d["Facturacion_Neta"], errors="coerce").replace(0, float("nan"))
+    d["Costo_Caja"] = pd.to_numeric(d["Costo_Total"], errors="coerce") / cajas
+    d["CM_Caja"] = pd.to_numeric(d["CM_pesos"], errors="coerce") / cajas
+    d["CM_%"] = pd.to_numeric(d["CM_pesos"], errors="coerce") / fact * 100
+    d["Mes_txt"] = pd.to_datetime(d["Mes"]).dt.strftime("%Y-%m")
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=d["Mes_txt"], y=d["Costo_Caja"], mode="lines+markers", name="Costo / Caja", line=dict(color=CARBON, width=2.5)))
+    fig.add_trace(go.Scatter(x=d["Mes_txt"], y=d["CM_Caja"], mode="lines+markers", name="CM / Caja", line=dict(color=ROJO, width=2.5)))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=390, hovermode="x unified",
+        xaxis=dict(title=None),
+        yaxis=dict(title="$ por Caja Física", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.2f"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=20, t=45, b=35),
+    )
+    return fig
+
 def tarjeta_insight(titulo, texto, estado="info"):
     clase = {"ok": "cmg-status-ok", "warn": "cmg-status-warn", "bad": "cmg-status-bad"}.get(estado, "")
     st.markdown(
@@ -1007,9 +1257,9 @@ venta_prev_cm = venta_prev[venta_prev["CM_calculada"]] if venta_prev is not None
 # ----------------------------------------------------------------------
 # NAVEGACIÓN
 # ----------------------------------------------------------------------
-tab_resumen, tab_rentabilidad, tab_clientes, tab_canales, tab_locaciones, tab_explorador, tab_articulo, tab_calidad, tab_crudo = st.tabs(
+tab_resumen, tab_rentabilidad, tab_costos, tab_clientes, tab_canales, tab_locaciones, tab_explorador, tab_articulo, tab_calidad, tab_crudo = st.tabs(
     [
-        "🏠 Resumen ejecutivo", "💰 Rentabilidad", "👥 Clientes", "🏪 Canales",
+        "🏠 Resumen ejecutivo", "💰 Rentabilidad", "📉 Costos & Variaciones", "👥 Clientes", "🏪 Canales",
         "🏭 Locaciones", "🧭 Explorador", "🔎 Artículo", "✅ Calidad", "🗂️ Datos"
     ]
 )
@@ -1165,7 +1415,214 @@ with tab_rentabilidad:
         )
         boton_descarga(tabla_prod[cols], "rentabilidad_productos.csv", "⬇️ Descargar análisis de productos")
 
-# --- Tab 3: Clientes --------------------------------------------------------
+
+# --- Tab 3: Costos y Variaciones -------------------------------------------
+with tab_costos:
+    titulo_panel(
+        "Costos y explicación de variaciones",
+        "Reconciliá la CM entre períodos y detectá qué componentes de costo presionaron o liberaron margen.",
+    )
+
+    # Cuando la selección global tiene una ventana anterior completa, se usa como
+    # opción principal. Si no, el modo mes-a-mes permite analizar igualmente.
+    _prev_global_ok = venta_prev is not None and not venta_prev.empty
+    opciones_modo = ["Período filtrado vs período anterior", "Mes vs mes anterior"]
+    modo_default = 0 if _prev_global_ok else 1
+    modo_costos = st.radio(
+        "Modo de comparación",
+        opciones_modo,
+        index=modo_default,
+        horizontal=True,
+        key="costos_modo_comparacion",
+        help=(
+            "El primer modo toma exactamente los meses de los filtros globales y busca una ventana inmediatamente anterior de igual longitud. "
+            "El segundo compara un mes puntual contra el mes calendario anterior."
+        ),
+    )
+
+    if modo_costos == "Período filtrado vs período anterior":
+        actual_scope = venta_f.copy()
+        actual_cm_scope = venta_cm_f.copy()
+        anterior_scope = venta_prev.copy() if _prev_global_ok else None
+        anterior_cm_scope = anterior_scope[anterior_scope["CM_calculada"]].copy() if anterior_scope is not None else None
+        meses_actual_txt = sorted(pd.Timestamp(m).strftime("%Y-%m") for m in actual_scope["Mes"].dropna().unique())
+        meses_prev_txt = sorted(pd.Timestamp(m).strftime("%Y-%m") for m in anterior_scope["Mes"].dropna().unique()) if anterior_scope is not None else []
+        etiqueta_actual = f"Período actual ({meses_actual_txt[0]} a {meses_actual_txt[-1]})" if meses_actual_txt else "Período actual"
+        etiqueta_prev = f"Período anterior ({meses_prev_txt[0]} a {meses_prev_txt[-1]})" if meses_prev_txt else "Período anterior"
+    else:
+        disponibles_ts = sorted(pd.Timestamp(m) for m in meses_disp)
+        set_disp = set(disponibles_ts)
+        meses_ref = sorted(pd.Timestamp(m) for m in (meses_sel or meses_disp))
+        candidatos = [m for m in meses_ref if (m - pd.offsets.MonthBegin(1)) in set_disp]
+        if not candidatos:
+            candidatos = [m for m in disponibles_ts if (m - pd.offsets.MonthBegin(1)) in set_disp]
+
+        if not candidatos:
+            actual_scope = anterior_scope = actual_cm_scope = anterior_cm_scope = None
+            etiqueta_actual = etiqueta_prev = ""
+            st.warning("No hay dos meses consecutivos disponibles para realizar una comparación mes contra mes.")
+        else:
+            mes_costos = st.selectbox(
+                "Mes actual a analizar",
+                options=candidatos,
+                index=len(candidatos) - 1,
+                format_func=lambda m: pd.Timestamp(m).strftime("%Y-%m"),
+                key="costos_mes_actual",
+            )
+            mes_costos = pd.Timestamp(mes_costos)
+            mes_prev_costos = mes_costos - pd.offsets.MonthBegin(1)
+            actual_scope = venta_cm[venta_cm["Mes"] == mes_costos].copy()
+            anterior_scope = venta_cm[venta_cm["Mes"] == mes_prev_costos].copy()
+            actual_scope = _aplicar_filtros_dimension(actual_scope, locaciones_sel, canales_sel)
+            anterior_scope = _aplicar_filtros_dimension(anterior_scope, locaciones_sel, canales_sel)
+            actual_cm_scope = actual_scope[actual_scope["CM_calculada"]].copy()
+            anterior_cm_scope = anterior_scope[anterior_scope["CM_calculada"]].copy()
+            etiqueta_actual = f"Mes actual ({mes_costos.strftime('%Y-%m')})"
+            etiqueta_prev = f"Mes anterior ({mes_prev_costos.strftime('%Y-%m')})"
+
+    if actual_scope is not None and not actual_scope.empty:
+        # Estructura actual siempre visible, incluso si no existe comparación válida.
+        fact_a, cajas_a, cm_a, cmpct_a, cmcaja_a, cobertura_a = _metricas_scope(actual_scope, actual_cm_scope)
+        costo_a = _suma_num(actual_cm_scope, "Costo Total")
+        cajas_cost_a = _suma_num(actual_cm_scope, "Cajas Fisicas")
+        costo_caja_a = costo_a / cajas_cost_a if cajas_cost_a else 0.0
+
+        tiene_prev = anterior_scope is not None and anterior_cm_scope is not None and not anterior_scope.empty
+        if tiene_prev:
+            fact_p, cajas_p, cm_p, cmpct_p, cmcaja_p, cobertura_p = _metricas_scope(anterior_scope, anterior_cm_scope)
+            costo_p = _suma_num(anterior_cm_scope, "Costo Total")
+            cajas_cost_p = _suma_num(anterior_cm_scope, "Cajas Fisicas")
+            costo_caja_p = costo_p / cajas_cost_p if cajas_cost_p else 0.0
+        else:
+            fact_p = cajas_p = cm_p = cmpct_p = cmcaja_p = cobertura_p = costo_p = costo_caja_p = 0.0
+
+        st.caption(f"**{etiqueta_actual}**" + (f"  vs  **{etiqueta_prev}**" if tiene_prev else ""))
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Facturación costeada", fmt_pesos(_suma_num(actual_cm_scope, "Facturacion Neta")), delta=_texto_delta(_delta_pct(_suma_num(actual_cm_scope, "Facturacion Neta"), _suma_num(anterior_cm_scope, "Facturacion Neta"))) if tiene_prev else None)
+        k2.metric("CM", fmt_pesos(cm_a), delta=_texto_delta(_delta_pct(cm_a, cm_p)) if tiene_prev else None)
+        k3.metric("CM %", f"{fmt_n(cmpct_a, 1)}%", delta=_texto_delta(_delta_pp(cmpct_a, cmpct_p), " pp") if tiene_prev else None)
+        k4.metric("Costo / Caja", fmt_pesos(costo_caja_a, 2), delta=_texto_delta(_delta_pct(costo_caja_a, costo_caja_p)) if tiene_prev else None, delta_color="inverse")
+        k5.metric("Cobertura de costeo", f"{fmt_n(cobertura_a, 1)}%", delta=_texto_delta(_delta_pp(cobertura_a, cobertura_p), " pp") if tiene_prev else None)
+
+        # Composición del costo del período actual.
+        divisor()
+        titulo_panel("Estructura de costos actual", "Peso de cada componente dentro del período elegido. Se calcula únicamente sobre filas con CM disponible.")
+        costos_actual = resumen_costos_periodo(actual_cm_scope)
+        if costos_actual.empty:
+            st.info("No hay costos calculados para este alcance.")
+        else:
+            tabla_costos = costos_actual[["Concepto", "Costo", "Costo_Caja", "%_Facturacion"]].copy()
+            c_graf, c_tabla = st.columns([1.35, 1])
+            with c_graf:
+                st.plotly_chart(fig_estructura_costos(costos_actual), width="stretch", theme=None, config=CONFIG_CHART, key="costos_estructura_actual")
+            with c_tabla:
+                st.dataframe(
+                    tabla_costos.style.format({
+                        "Costo": fmt_pesos,
+                        "Costo_Caja": lambda v: fmt_pesos(v, 2),
+                        "%_Facturacion": lambda v: f"{fmt_n(v, 2)}%",
+                    }, na_rep="—"),
+                    width="stretch", hide_index=True, height=455,
+                )
+
+        if tiene_prev:
+            comp_costos = comparar_costos(actual_cm_scope, anterior_cm_scope)
+            delta_vol = _delta_pct(_suma_num(actual_cm_scope, "Cajas Fisicas"), _suma_num(anterior_cm_scope, "Cajas Fisicas"))
+            delta_fact_cost = _delta_pct(_suma_num(actual_cm_scope, "Facturacion Neta"), _suma_num(anterior_cm_scope, "Facturacion Neta"))
+            delta_cm_abs = cm_a - cm_p
+
+            divisor()
+            titulo_panel(
+                "Puente de Contribución Marginal",
+                "Reconciliación exacta: CM anterior + variación de Facturación − variación de cada costo = CM actual. No atribuye causalidad precio/volumen/mix.",
+            )
+            st.plotly_chart(fig_bridge_variacion_cm(actual_cm_scope, anterior_cm_scope), width="stretch", theme=None, config=CONFIG_CHART, key="costos_bridge_cm")
+
+            divisor()
+            titulo_panel("Qué explicó el cambio", "Impacto aritmético de cada componente sobre la variación de CM. Rojo = presión; verde = alivio.")
+            c1, c2 = st.columns([1.25, 1])
+            with c1:
+                st.plotly_chart(fig_impacto_costos(comp_costos), width="stretch", theme=None, config=CONFIG_CHART, key="costos_impactos")
+            with c2:
+                presiones = comp_costos.sort_values("Impacto_CM")
+                mayor_presion = presiones.iloc[0] if not presiones.empty else None
+                mayor_alivio = presiones.iloc[-1] if not presiones.empty else None
+                tarjeta_insight(
+                    "Resultado del período",
+                    f"La CM {'aumentó' if delta_cm_abs >= 0 else 'cayó'} {fmt_pesos(abs(delta_cm_abs))}. Facturación costeada: {_texto_delta(delta_fact_cost) or 'sin base comparable'}; volumen: {_texto_delta(delta_vol) or 'sin base comparable'}.",
+                    "ok" if delta_cm_abs >= 0 else "bad",
+                )
+                st.write("")
+                if mayor_presion is not None:
+                    tarjeta_insight(
+                        "Mayor presión de costo",
+                        f"{mayor_presion['Concepto']} tuvo un impacto de {fmt_pesos(mayor_presion['Impacto_CM'])} sobre la variación de CM. Su costo cambió {fmt_pesos(mayor_presion['Variacion_Costo'])}.",
+                        "bad" if mayor_presion["Impacto_CM"] < 0 else "ok",
+                    )
+                st.write("")
+                if mayor_alivio is not None:
+                    tarjeta_insight(
+                        "Mayor alivio de costo",
+                        f"{mayor_alivio['Concepto']} aportó {fmt_pesos(mayor_alivio['Impacto_CM'])} a la variación de CM.",
+                        "ok" if mayor_alivio["Impacto_CM"] > 0 else "warn",
+                    )
+                st.write("")
+                if delta_vol is not None and delta_vol > 0 and cmpct_a < cmpct_p:
+                    tarjeta_insight(
+                        "Volumen ↑, margen % ↓",
+                        f"El volumen creció {fmt_n(delta_vol, 1)}%, pero la CM % cayó {fmt_n(cmpct_p - cmpct_a, 1)} pp. Conviene revisar mix, precio neto y costos unitarios.",
+                        "warn",
+                    )
+
+            divisor()
+            a, b = st.columns(2)
+            with a:
+                titulo_panel("Costo por Caja", "Comparación de eficiencia unitaria en los componentes más materiales.")
+                st.plotly_chart(fig_costos_unitarios(comp_costos), width="stretch", theme=None, config=CONFIG_CHART, key="costos_unitarios")
+            with b:
+                titulo_panel("Mix de costos sobre facturación", "Permite separar el efecto de escala del deterioro/mejora relativa de cada costo.")
+                st.plotly_chart(fig_mix_costos(comp_costos), width="stretch", theme=None, config=CONFIG_CHART, key="costos_mix_facturacion")
+
+            divisor()
+            titulo_panel("Detalle comparativo", "Tabla auditable de todos los componentes y sus variaciones.")
+            detalle_comp = comp_costos[[
+                "Concepto", "Anterior", "Actual", "Variacion_Costo", "Impacto_CM",
+                "Anterior_Caja", "Actual_Caja", "Var_Caja_%", "Anterior_%Fact", "Actual_%Fact", "Var_pp"
+            ]].copy()
+            st.dataframe(
+                detalle_comp.style.format({
+                    "Anterior": fmt_pesos, "Actual": fmt_pesos, "Variacion_Costo": fmt_pesos, "Impacto_CM": fmt_pesos,
+                    "Anterior_Caja": lambda v: fmt_pesos(v, 2), "Actual_Caja": lambda v: fmt_pesos(v, 2),
+                    "Var_Caja_%": lambda v: f"{fmt_n(v, 1)}%", "Anterior_%Fact": lambda v: f"{fmt_n(v, 2)}%",
+                    "Actual_%Fact": lambda v: f"{fmt_n(v, 2)}%", "Var_pp": lambda v: f"{fmt_n(v, 2)} pp",
+                }, na_rep="—"),
+                width="stretch", hide_index=True,
+            )
+            boton_descarga(detalle_comp, "comparacion_costos.csv", "⬇️ Descargar comparación de costos")
+
+            # Alerta de comparabilidad de cobertura.
+            if abs(cobertura_a - cobertura_p) >= 1.0:
+                st.warning(
+                    f"La cobertura de costeo cambió {fmt_n(cobertura_a - cobertura_p, 1)} pp entre períodos. "
+                    "La reconciliación matemática sigue siendo correcta sobre las filas costeadas, pero parte de la variación puede reflejar cambios de cobertura."
+                )
+        else:
+            st.info(
+                "No existe una ventana anterior completa con los filtros actuales. Podés cambiar a **Mes vs mes anterior** para habilitar el puente de variación."
+            )
+
+        divisor()
+        titulo_panel("Tendencia de eficiencia", "Costo total por caja y CM por caja a lo largo del tiempo para el alcance de Canal/Locación actual.")
+        # Para dar contexto temporal, usamos todos los meses disponibles conservando Canal y Locación.
+        contexto = _aplicar_filtros_dimension(venta_cm, locaciones_sel, canales_sel)
+        contexto_cm = contexto[contexto["CM_calculada"]].copy()
+        st.plotly_chart(fig_tendencia_eficiencia(contexto_cm), width="stretch", theme=None, config=CONFIG_CHART, key="costos_tendencia_eficiencia")
+
+    elif actual_scope is not None:
+        st.info("No hay datos para el período y los filtros seleccionados.")
+
+# --- Tab 4: Clientes --------------------------------------------------------
 with tab_clientes:
     titulo_panel(
         "Rentabilidad por cliente",
@@ -1257,7 +1714,7 @@ with tab_clientes:
             st.dataframe(_tabla_entidad_estilo(clientes), width="stretch", hide_index=True, height=520)
             boton_descarga(clientes, "rentabilidad_clientes.csv", "⬇️ Descargar clientes")
 
-# --- Tab 4: Canales ---------------------------------------------------------
+# --- Tab 5: Canales ---------------------------------------------------------
 with tab_canales:
     titulo_panel("Gestión por canal", "Compará rentabilidad, cobertura, volumen y concentración; después abrí un canal hasta cliente, producto y costo.")
     if canales_detalle.empty:
@@ -1297,7 +1754,7 @@ with tab_canales:
             if not canal_cm.empty: st.plotly_chart(fig_costos_scope(canal_cm), width="stretch", theme=None, config=CONFIG_CHART, key="canales_detalle_costos")
         boton_descarga(canales_detalle, "rentabilidad_canales.csv", "⬇️ Descargar canales")
 
-# --- Tab 5: Locaciones ------------------------------------------------------
+# --- Tab 6: Locaciones ------------------------------------------------------
 with tab_locaciones:
     titulo_panel("Gestión por locación", "Compará operaciones y bajá desde una locación hasta sus clientes, productos y componentes de costo.")
     if locaciones_detalle.empty:
@@ -1337,7 +1794,7 @@ with tab_locaciones:
             if not loc_cm.empty: st.plotly_chart(fig_costos_scope(loc_cm), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_detalle_costos")
         boton_descarga(locaciones_detalle, "rentabilidad_locaciones.csv", "⬇️ Descargar locaciones")
 
-# --- Tab 6: Explorador jerárquico -----------------------------------------
+# --- Tab 7: Explorador jerárquico -----------------------------------------
 with tab_explorador:
     titulo_panel("Explorador de rentabilidad", "Drill-down guiado: Empresa → Canal → Cliente → Producto → Costos. Siempre parte de los filtros globales.")
     exp_all = venta_f.copy()
@@ -1405,7 +1862,7 @@ with tab_explorador:
             st.dataframe(exp_cm[cols_exp], width="stretch", hide_index=True, height=450)
             boton_descarga(exp_cm[cols_exp], "explorador_cmg.csv", "⬇️ Descargar selección")
 
-# --- Tab 7: Detalle por artículo -------------------------------------------
+# --- Tab 8: Detalle por artículo -------------------------------------------
 with tab_articulo:
     articulos_disp = (
         venta_f[["Cod. Venta", "Descripción del material"]]
@@ -1546,7 +2003,7 @@ with tab_articulo:
                 width="stretch", hide_index=True,
             )
 
-# --- Tab 8: Calidad de datos -------------------------------------------------
+# --- Tab 9: Calidad de datos -------------------------------------------------
 with tab_calidad:
     titulo_panel("Calidad y cobertura de los datos", "Controles visibles para saber qué tan confiable es el análisis antes de tomar decisiones.")
 
@@ -1601,7 +2058,7 @@ with tab_calidad:
             )
             st.dataframe(resumen_sc, width="stretch", hide_index=True)
 
-# --- Tab 9: Datos crudos ----------------------------------------------------
+# --- Tab 10: Datos crudos ----------------------------------------------------
 with tab_crudo:
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
     hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
