@@ -159,6 +159,11 @@ def aplicar_estilos():
         .cmg-status-warn {{ color: {DORADO}; font-weight: 700; }}
         .cmg-status-bad {{ color: {ROJO}; font-weight: 700; }}
         .cmg-kpi-caption {{ color: {GRIS_TEXTO}; font-size: .74rem; margin-top: -8px; }}
+        .cmg-breadcrumb {{
+            background: {BLANCO}; border: 1px solid {GRIS_BORDE}; border-radius: 8px;
+            padding: 9px 12px; color: {GRIS_TEXTO}; font-size: .82rem; margin: 4px 0 14px 0;
+        }}
+        .cmg-breadcrumb strong {{ color: {CARBON}; }}
 
         @media (max-width: 640px) {{
             div[data-testid="column"] {{ width: 100% !important; flex: 1 1 100% !important; }}
@@ -532,6 +537,148 @@ def fig_pareto(productos):
     return fig
 
 
+
+def fig_matriz_clientes(clientes, max_puntos=1200):
+    """Mapa volumen x margen para clientes. Limita solo la visual, no los cálculos."""
+    d = clientes.copy()
+    d = d[(d["Cajas_Fisicas"] > 0) & d["CM_%"].notna()].copy()
+    if d.empty:
+        return go.Figure(), 0
+    total = len(d)
+    if total > max_puntos:
+        d = d.nlargest(max_puntos, "Facturacion_Neta").copy()
+
+    fact_pos = d["Facturacion_Neta"].clip(lower=0)
+    max_fact = fact_pos.max()
+    tamanos = 8 + (fact_pos / max_fact * 26 if max_fact else 0)
+    colores = [VERDE if v >= 0 else ROJO for v in d["CM_%"]]
+    custom = d[["Cliente", "Nom.Cliente", "Canal", "Locación", "Facturacion_Neta", "CM_pesos"]].to_numpy()
+
+    fig = go.Figure(go.Scattergl(
+        x=d["Cajas_Fisicas"], y=d["CM_%"], mode="markers",
+        marker=dict(size=tamanos, color=colores, opacity=.58, line=dict(width=.5, color=BLANCO)),
+        customdata=custom,
+        hovertemplate=(
+            "<b>%{customdata[0]} - %{customdata[1]}</b><br>"
+            "Canal: %{customdata[2]}<br>Locación: %{customdata[3]}<br>"
+            "Cajas: %{x:,.0f}<br>CM %: %{y:.1f}%<br>"
+            "Facturación: $ %{customdata[4]:,.0f}<br>CM: $ %{customdata[5]:,.0f}<extra></extra>"
+        ),
+    ))
+    med_x = d["Cajas_Fisicas"].median()
+    med_y = d["CM_%"].median()
+    fig.add_vline(x=med_x, line_dash="dot", line_color=GRIS_TEXTO, opacity=.55)
+    fig.add_hline(y=med_y, line_dash="dot", line_color=GRIS_TEXTO, opacity=.55)
+    fig.add_hline(y=0, line_width=1.4, line_color=ROJO, opacity=.8)
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=500, showlegend=False,
+        xaxis=dict(title="Volumen (Cajas Físicas)", gridcolor=GRIS_BORDE, tickformat=",.0f"),
+        yaxis=dict(title="CM %", gridcolor=GRIS_BORDE, ticksuffix="%"),
+        margin=dict(l=15, r=15, t=25, b=45),
+    )
+    return fig, total
+
+
+def fig_ranking_clientes_cmg(clientes, mejores=True, top_n=12):
+    d = clientes.copy()
+    if d.empty:
+        return go.Figure()
+    if mejores:
+        d = d.nlargest(top_n, "CM_pesos").sort_values("CM_pesos", ascending=True)
+    else:
+        d = d.nsmallest(top_n, "CM_pesos").sort_values("CM_pesos", ascending=False)
+
+    etiquetas = []
+    for _, row in d.iterrows():
+        cod = fmt_entero(row["Cliente"])
+        nom = str(row.get("Nom.Cliente", ""))
+        if len(nom) > 28:
+            nom = nom[:27] + "…"
+        etiquetas.append(f"{cod} - {nom}")
+    colores = [VERDE if v >= 0 else ROJO for v in d["CM_pesos"]]
+    fig = go.Figure(go.Bar(
+        x=d["CM_pesos"], y=etiquetas, orientation="h", marker=dict(color=colores),
+        customdata=d[["CM_%", "Facturacion_Neta", "Cajas_Fisicas", "Canal", "Locación"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{y}</b><br>CM: $ %{x:,.0f}<br>CM %: %{customdata[0]:.1f}%<br>"
+            "Facturación: $ %{customdata[1]:,.0f}<br>Cajas: %{customdata[2]:,.0f}<br>"
+            "Canal: %{customdata[3]}<br>Locación: %{customdata[4]}<extra></extra>"
+        ),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(350, 32 * len(d)), showlegend=False,
+        xaxis=dict(title="Contribución Marginal ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=8, r=20, t=15, b=35),
+    )
+    fig.add_vline(x=0, line_width=1, line_color=CARBON)
+    return fig
+
+
+def fig_costos_scope(df_scope, top_n=12):
+    """Estructura de costos agregada para cualquier selección de filas costeadas."""
+    if df_scope.empty:
+        return go.Figure()
+    cols_costos = [c for c in COLUMNAS_CASCADA[1:-1] if c in df_scope.columns]
+    if not cols_costos:
+        return go.Figure()
+    valores = pd.to_numeric(df_scope[cols_costos].sum(), errors="coerce").fillna(0)
+    d = pd.DataFrame({"Concepto": valores.index, "Monto": valores.values})
+    d = d[d["Monto"].abs() > 0].copy()
+    if d.empty:
+        return go.Figure()
+    d["Abs"] = d["Monto"].abs()
+    d = d.nlargest(top_n, "Abs").sort_values("Abs", ascending=True)
+    fact = pd.to_numeric(df_scope["Facturacion Neta"], errors="coerce").sum()
+    d["Pct_fact"] = d["Monto"] / fact * 100 if fact else 0.0
+    colores = [ROJO if v >= 0 else VERDE for v in d["Monto"]]
+    fig = go.Figure(go.Bar(
+        x=d["Monto"], y=d["Concepto"], orientation="h", marker=dict(color=colores),
+        customdata=d[["Pct_fact"]].to_numpy(),
+        hovertemplate="<b>%{y}</b><br>Costo: $ %{x:,.0f}<br>% Facturación: %{customdata[0]:.1f}%<extra></extra>",
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(350, 31 * len(d)), showlegend=False,
+        xaxis=dict(title="Costo ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=8, r=20, t=15, b=35),
+    )
+    return fig
+
+
+def fig_mix_productos(productos, top_n=12):
+    """Mix de productos por CM, útil dentro de cliente/canal/locación."""
+    if productos.empty:
+        return go.Figure()
+    d = productos.nlargest(top_n, "Facturacion_Neta").sort_values("Facturacion_Neta", ascending=True).copy()
+    etiquetas = []
+    for _, row in d.iterrows():
+        desc = str(row.get("Descripción del material", ""))
+        if len(desc) > 28:
+            desc = desc[:27] + "…"
+        etiquetas.append(f"{fmt_entero(row['Cod. Venta'])} - {desc}")
+    colores = [VERDE if v >= 0 else ROJO for v in d["CM_pesos"]]
+    fig = go.Figure(go.Bar(
+        x=d["Facturacion_Neta"], y=etiquetas, orientation="h", marker=dict(color=colores),
+        customdata=d[["CM_pesos", "CM_%", "Cajas_Fisicas"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{y}</b><br>Facturación: $ %{x:,.0f}<br>CM: $ %{customdata[0]:,.0f}<br>"
+            "CM %: %{customdata[1]:.1f}%<br>Cajas: %{customdata[2]:,.0f}<extra></extra>"
+        ),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(350, 32 * len(d)), showlegend=False,
+        xaxis=dict(title="Facturación Neta ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=8, r=20, t=15, b=35),
+    )
+    return fig
+
+
 def tarjeta_insight(titulo, texto, estado="info"):
     clase = {"ok": "cmg-status-ok", "warn": "cmg-status-warn", "bad": "cmg-status-bad"}.get(estado, "")
     st.markdown(
@@ -736,6 +883,90 @@ def resumen_productos(df: pd.DataFrame) -> pd.DataFrame:
     return g.sort_values("CM_pesos", ascending=False)
 
 
+
+def resumen_entidad_integral(df_all: pd.DataFrame, df_cm: pd.DataFrame, agrupar_por, incluir_clientes=False) -> pd.DataFrame:
+    """Resumen que conserva facturación total y calcula CM solo sobre filas costeadas.
+
+    Esto evita esconder venta sin regla de costeo y expone explícitamente la cobertura.
+    """
+    keys = [agrupar_por] if isinstance(agrupar_por, str) else list(agrupar_por)
+    columnas = keys + ["Facturacion_Neta", "Cajas_Fisicas", "Facturacion_Costeada", "Cajas_Costeadas", "CM_pesos", "CM_%", "CM_Caja", "Cobertura_%", "SKU"]
+    if incluir_clientes:
+        columnas.append("Clientes")
+    if df_all.empty:
+        return pd.DataFrame(columns=columnas)
+
+    agg_all = {
+        "Facturacion_Neta": ("Facturacion Neta", "sum"),
+        "Cajas_Fisicas": ("Cajas Fisicas", "sum"),
+        "SKU": ("Cod. Venta", "nunique"),
+    }
+    if incluir_clientes:
+        agg_all["Clientes"] = ("Cliente", "nunique")
+    base = df_all.groupby(keys, as_index=False, dropna=False).agg(**agg_all)
+
+    if df_cm.empty:
+        base["Facturacion_Costeada"] = 0.0
+        base["Cajas_Costeadas"] = 0.0
+        base["CM_pesos"] = 0.0
+    else:
+        rent = df_cm.groupby(keys, as_index=False, dropna=False).agg(
+            Facturacion_Costeada=("Facturacion Neta", "sum"),
+            Cajas_Costeadas=("Cajas Fisicas", "sum"),
+            CM_pesos=("CM ($)", "sum"),
+        )
+        base = base.merge(rent, on=keys, how="left")
+        for c in ["Facturacion_Costeada", "Cajas_Costeadas", "CM_pesos"]:
+            base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0.0)
+
+    base["CM_%"] = porcentaje_seguro(base["CM_pesos"], base["Facturacion_Costeada"], 1)
+    cajas_cost = pd.to_numeric(base["Cajas_Costeadas"], errors="coerce").replace(0, float("nan"))
+    base["CM_Caja"] = pd.to_numeric(base["CM_pesos"], errors="coerce") / cajas_cost
+    base["Cobertura_%"] = porcentaje_seguro(base["Facturacion_Costeada"], base["Facturacion_Neta"], 1)
+    return base.sort_values("CM_pesos", ascending=False)
+
+
+def resumen_clientes_integral(df_all: pd.DataFrame, df_cm: pd.DataFrame) -> pd.DataFrame:
+    return resumen_entidad_integral(
+        df_all, df_cm, ["Cliente", "Nom.Cliente", "Canal", "Locación"], incluir_clientes=False
+    )
+
+
+def _tendencia_scope(df_all: pd.DataFrame, df_cm: pd.DataFrame) -> pd.DataFrame:
+    por_mes = df_all.groupby("Mes", as_index=False)["Facturacion Neta"].sum()
+    if por_mes.empty:
+        return por_mes
+    cm_mes = df_cm.groupby("Mes")["CM ($)"].sum() if not df_cm.empty else pd.Series(dtype=float)
+    por_mes["Contribución Marginal"] = por_mes["Mes"].map(cm_mes).fillna(0)
+    por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
+    return por_mes
+
+
+def _metricas_scope(df_all: pd.DataFrame, df_cm: pd.DataFrame):
+    fact = pd.to_numeric(df_all["Facturacion Neta"], errors="coerce").sum() if not df_all.empty else 0.0
+    cajas = pd.to_numeric(df_all["Cajas Fisicas"], errors="coerce").sum() if not df_all.empty else 0.0
+    fact_cm = pd.to_numeric(df_cm["Facturacion Neta"], errors="coerce").sum() if not df_cm.empty else 0.0
+    cajas_cm = pd.to_numeric(df_cm["Cajas Fisicas"], errors="coerce").sum() if not df_cm.empty else 0.0
+    cm = pd.to_numeric(df_cm["CM ($)"], errors="coerce").sum() if not df_cm.empty else 0.0
+    cm_pct = cm / fact_cm * 100 if fact_cm else 0.0
+    cm_caja = cm / cajas_cm if cajas_cm else 0.0
+    cobertura = fact_cm / fact * 100 if fact else 0.0
+    return fact, cajas, cm, cm_pct, cm_caja, cobertura
+
+
+def _tabla_entidad_estilo(df):
+    formatos = {}
+    for c in ["Facturacion_Neta", "Facturacion_Costeada", "CM_pesos"]:
+        if c in df.columns: formatos[c] = fmt_pesos
+    for c in ["Cajas_Fisicas", "Cajas_Costeadas", "Clientes", "SKU"]:
+        if c in df.columns: formatos[c] = fmt_n
+    if "Cliente" in df.columns: formatos["Cliente"] = fmt_entero
+    if "CM_%" in df.columns: formatos["CM_%"] = lambda v: f"{fmt_n(v, 1)}%"
+    if "Cobertura_%" in df.columns: formatos["Cobertura_%"] = lambda v: f"{fmt_n(v, 1)}%"
+    if "CM_Caja" in df.columns: formatos["CM_Caja"] = lambda v: fmt_pesos(v, 2)
+    return df.style.format(formatos, na_rep="—")
+
+
 def _aplicar_filtros_dimension(df, locaciones, canales):
     out = df.copy()
     if locaciones:
@@ -765,6 +996,9 @@ def periodo_anterior_comparable():
 productos = resumen_productos(venta_cm_f)
 resumen_canal = resumen_cm(venta_cm_f, "Canal")
 resumen_locacion = resumen_cm(venta_cm_f, "Locación")
+clientes = resumen_clientes_integral(venta_f, venta_cm_f)
+canales_detalle = resumen_entidad_integral(venta_f, venta_cm_f, "Canal", incluir_clientes=True)
+locaciones_detalle = resumen_entidad_integral(venta_f, venta_cm_f, "Locación", incluir_clientes=True)
 
 # Período anterior para deltas ejecutivos.
 venta_prev = periodo_anterior_comparable()
@@ -773,8 +1007,11 @@ venta_prev_cm = venta_prev[venta_prev["CM_calculada"]] if venta_prev is not None
 # ----------------------------------------------------------------------
 # NAVEGACIÓN
 # ----------------------------------------------------------------------
-tab_resumen, tab_rentabilidad, tab_articulo, tab_calidad, tab_crudo = st.tabs(
-    ["🏠 Resumen ejecutivo", "💰 Rentabilidad", "🔎 Detalle por artículo", "✅ Calidad de datos", "🗂️ Datos crudos"]
+tab_resumen, tab_rentabilidad, tab_clientes, tab_canales, tab_locaciones, tab_explorador, tab_articulo, tab_calidad, tab_crudo = st.tabs(
+    [
+        "🏠 Resumen ejecutivo", "💰 Rentabilidad", "👥 Clientes", "🏪 Canales",
+        "🏭 Locaciones", "🧭 Explorador", "🔎 Artículo", "✅ Calidad", "🗂️ Datos"
+    ]
 )
 
 # --- Tab 1: Resumen ejecutivo ---------------------------------------------
@@ -928,7 +1165,247 @@ with tab_rentabilidad:
         )
         boton_descarga(tabla_prod[cols], "rentabilidad_productos.csv", "⬇️ Descargar análisis de productos")
 
-# --- Tab 2: Detalle por artículo -------------------------------------------
+# --- Tab 3: Clientes --------------------------------------------------------
+with tab_clientes:
+    titulo_panel(
+        "Rentabilidad por cliente",
+        "Encontrá clientes que generan margen, clientes que destruyen valor y después bajá hasta producto y estructura de costos.",
+    )
+    if clientes.empty:
+        st.info("No hay clientes con información para los filtros seleccionados.")
+    else:
+        positivos_cli = clientes[clientes["CM_pesos"] > 0]
+        negativos_cli = clientes[clientes["CM_pesos"] < 0]
+        cm_pos_total = positivos_cli["CM_pesos"].sum()
+        top10_cm = positivos_cli.nlargest(10, "CM_pesos")["CM_pesos"].sum() if not positivos_cli.empty else 0
+        conc10 = top10_cm / cm_pos_total * 100 if cm_pos_total else 0
+        cobertura_cli = venta_cm_f["Facturacion Neta"].sum() / venta_f["Facturacion Neta"].sum() * 100 if venta_f["Facturacion Neta"].sum() else 0
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Clientes activos", fmt_n(len(clientes)))
+        k2.metric("Clientes con CM negativa", fmt_n(len(negativos_cli)))
+        k3.metric("Top 10 / CM positiva", f"{fmt_n(conc10, 1)}%", help="Concentración de la CM positiva en los 10 clientes que más aportan.")
+        k4.metric("Cobertura de costeo", f"{fmt_n(cobertura_cli, 1)}%")
+
+        divisor()
+        titulo_panel("Mapa de clientes", "Volumen en X, CM % en Y y tamaño por facturación. La visual prioriza los clientes de mayor facturación cuando hay más de 1.200 puntos.")
+        fig_cli, n_cli_mapa = fig_matriz_clientes(clientes)
+        st.plotly_chart(fig_cli, width="stretch", theme=None, config=CONFIG_CHART)
+        if n_cli_mapa > 1200:
+            st.caption(f"La matriz muestra los 1.200 clientes de mayor facturación de {fmt_n(n_cli_mapa)} clientes con datos válidos. Los KPIs y tablas usan el universo completo.")
+
+        divisor()
+        ca, cb = st.columns(2)
+        with ca:
+            titulo_panel("Clientes que más CM generan")
+            st.plotly_chart(fig_ranking_clientes_cmg(clientes, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+        with cb:
+            titulo_panel("Clientes con menor CM")
+            if (clientes["CM_pesos"] < 0).any():
+                st.plotly_chart(fig_ranking_clientes_cmg(clientes[clientes["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART)
+            else:
+                st.success("No hay clientes con CM negativa para los filtros actuales.")
+
+        divisor()
+        titulo_panel("Analizar un cliente", "Buscá por código o nombre. El detalle respeta los filtros globales de período, canal y locación.")
+        opciones_cli = {}
+        for _, r in clientes.sort_values("Facturacion_Neta", ascending=False).iterrows():
+            etiqueta = f"{fmt_entero(r['Cliente'])} - {r['Nom.Cliente']} | {r['Canal']} | {r['Locación']}"
+            opciones_cli[etiqueta] = (r["Cliente"], r["Nom.Cliente"], r["Canal"], r["Locación"])
+        etiqueta_cli = st.selectbox("Cliente", options=list(opciones_cli.keys()), key="cliente_detalle")
+        cli_cod, cli_nom, cli_canal, cli_loc = opciones_cli[etiqueta_cli]
+        mask_all = (
+            venta_f["Cliente"].eq(cli_cod) & venta_f["Nom.Cliente"].eq(cli_nom) &
+            venta_f["Canal"].eq(cli_canal) & venta_f["Locación"].eq(cli_loc)
+        )
+        mask_cm = (
+            venta_cm_f["Cliente"].eq(cli_cod) & venta_cm_f["Nom.Cliente"].eq(cli_nom) &
+            venta_cm_f["Canal"].eq(cli_canal) & venta_cm_f["Locación"].eq(cli_loc)
+        )
+        cli_all, cli_cm = venta_f[mask_all], venta_cm_f[mask_cm]
+        fact, cajas, cm, cmpct, cmcaja, cob = _metricas_scope(cli_all, cli_cm)
+        a1, a2, a3, a4, a5, a6 = st.columns(6)
+        a1.metric("Facturación", fmt_pesos(fact))
+        a2.metric("CM", fmt_pesos(cm))
+        a3.metric("CM %", f"{fmt_n(cmpct, 1)}%")
+        a4.metric("Cajas", fmt_n(cajas))
+        a5.metric("CM/Caja", fmt_pesos(cmcaja, 2))
+        a6.metric("Cobertura", f"{fmt_n(cob, 1)}%")
+
+        t1, t2 = st.columns([1.15, .85])
+        with t1:
+            titulo_panel("Evolución del cliente")
+            tendencia = _tendencia_scope(cli_all, cli_cm)
+            if tendencia.empty:
+                st.info("Sin serie mensual disponible.")
+            else:
+                st.plotly_chart(fig_tendencia_mensual(tendencia), width="stretch", theme=None, config=CONFIG_CHART)
+        with t2:
+            titulo_panel("Estructura de costos")
+            if cli_cm.empty:
+                st.info("El cliente no tiene filas costeadas en la selección.")
+            else:
+                st.plotly_chart(fig_costos_scope(cli_cm), width="stretch", theme=None, config=CONFIG_CHART)
+
+        titulo_panel("Mix de productos del cliente")
+        prod_cli = resumen_productos(cli_cm)
+        if prod_cli.empty:
+            st.info("No hay productos costeados para este cliente.")
+        else:
+            st.plotly_chart(fig_mix_productos(prod_cli), width="stretch", theme=None, config=CONFIG_CHART)
+        with st.expander("Ver tabla completa de clientes"):
+            st.dataframe(_tabla_entidad_estilo(clientes), width="stretch", hide_index=True, height=520)
+            boton_descarga(clientes, "rentabilidad_clientes.csv", "⬇️ Descargar clientes")
+
+# --- Tab 4: Canales ---------------------------------------------------------
+with tab_canales:
+    titulo_panel("Gestión por canal", "Compará rentabilidad, cobertura, volumen y concentración; después abrí un canal hasta cliente, producto y costo.")
+    if canales_detalle.empty:
+        st.info("No hay canales para los filtros seleccionados.")
+    else:
+        st.plotly_chart(fig_barras_cm(canales_detalle, "Canal", top_n=20), width="stretch", theme=None, config=CONFIG_CHART)
+        st.dataframe(_tabla_entidad_estilo(canales_detalle), width="stretch", hide_index=True)
+
+        divisor()
+        opciones_canal = canales_detalle.sort_values("Facturacion_Neta", ascending=False)["Canal"].astype(str).tolist()
+        canal_sel_mod = st.selectbox("Abrir canal", options=opciones_canal, key="canal_modulo")
+        canal_all = venta_f[venta_f["Canal"].astype(str).eq(canal_sel_mod)]
+        canal_cm = venta_cm_f[venta_cm_f["Canal"].astype(str).eq(canal_sel_mod)]
+        fact, cajas, cm, cmpct, cmcaja, cob = _metricas_scope(canal_all, canal_cm)
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Facturación", fmt_pesos(fact)); c2.metric("CM", fmt_pesos(cm)); c3.metric("CM %", f"{fmt_n(cmpct,1)}%")
+        c4.metric("Cajas", fmt_n(cajas)); c5.metric("Clientes", fmt_n(canal_all["Cliente"].nunique())); c6.metric("SKU", fmt_n(canal_all["Cod. Venta"].nunique()))
+
+        ca, cb = st.columns(2)
+        with ca:
+            titulo_panel("Clientes dentro del canal")
+            cli_canal = resumen_clientes_integral(canal_all, canal_cm)
+            st.plotly_chart(fig_ranking_clientes_cmg(cli_canal, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+        with cb:
+            titulo_panel("Productos dentro del canal")
+            prod_canal = resumen_productos(canal_cm)
+            if prod_canal.empty: st.info("Sin productos costeados.")
+            else: st.plotly_chart(fig_mix_productos(prod_canal), width="stretch", theme=None, config=CONFIG_CHART)
+
+        ca, cb = st.columns(2)
+        with ca:
+            titulo_panel("Evolución mensual")
+            t = _tendencia_scope(canal_all, canal_cm)
+            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+        with cb:
+            titulo_panel("Estructura de costos")
+            if not canal_cm.empty: st.plotly_chart(fig_costos_scope(canal_cm), width="stretch", theme=None, config=CONFIG_CHART)
+        boton_descarga(canales_detalle, "rentabilidad_canales.csv", "⬇️ Descargar canales")
+
+# --- Tab 5: Locaciones ------------------------------------------------------
+with tab_locaciones:
+    titulo_panel("Gestión por locación", "Compará operaciones y bajá desde una locación hasta sus clientes, productos y componentes de costo.")
+    if locaciones_detalle.empty:
+        st.info("No hay locaciones para los filtros seleccionados.")
+    else:
+        st.plotly_chart(fig_barras_cm(locaciones_detalle, "Locación", top_n=20), width="stretch", theme=None, config=CONFIG_CHART)
+        st.dataframe(_tabla_entidad_estilo(locaciones_detalle), width="stretch", hide_index=True)
+
+        divisor()
+        opciones_loc = locaciones_detalle.sort_values("Facturacion_Neta", ascending=False)["Locación"].astype(str).tolist()
+        loc_sel_mod = st.selectbox("Abrir locación", options=opciones_loc, key="locacion_modulo")
+        loc_all = venta_f[venta_f["Locación"].astype(str).eq(loc_sel_mod)]
+        loc_cm = venta_cm_f[venta_cm_f["Locación"].astype(str).eq(loc_sel_mod)]
+        fact, cajas, cm, cmpct, cmcaja, cob = _metricas_scope(loc_all, loc_cm)
+        l1, l2, l3, l4, l5, l6 = st.columns(6)
+        l1.metric("Facturación", fmt_pesos(fact)); l2.metric("CM", fmt_pesos(cm)); l3.metric("CM %", f"{fmt_n(cmpct,1)}%")
+        l4.metric("Cajas", fmt_n(cajas)); l5.metric("Clientes", fmt_n(loc_all["Cliente"].nunique())); l6.metric("SKU", fmt_n(loc_all["Cod. Venta"].nunique()))
+
+        la, lb = st.columns(2)
+        with la:
+            titulo_panel("Clientes de la locación")
+            cli_loc = resumen_clientes_integral(loc_all, loc_cm)
+            st.plotly_chart(fig_ranking_clientes_cmg(cli_loc, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+        with lb:
+            titulo_panel("Productos de la locación")
+            prod_loc = resumen_productos(loc_cm)
+            if prod_loc.empty: st.info("Sin productos costeados.")
+            else: st.plotly_chart(fig_mix_productos(prod_loc), width="stretch", theme=None, config=CONFIG_CHART)
+
+        la, lb = st.columns(2)
+        with la:
+            titulo_panel("Evolución mensual")
+            t = _tendencia_scope(loc_all, loc_cm)
+            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+        with lb:
+            titulo_panel("Estructura de costos")
+            if not loc_cm.empty: st.plotly_chart(fig_costos_scope(loc_cm), width="stretch", theme=None, config=CONFIG_CHART)
+        boton_descarga(locaciones_detalle, "rentabilidad_locaciones.csv", "⬇️ Descargar locaciones")
+
+# --- Tab 6: Explorador jerárquico -----------------------------------------
+with tab_explorador:
+    titulo_panel("Explorador de rentabilidad", "Drill-down guiado: Empresa → Canal → Cliente → Producto → Costos. Siempre parte de los filtros globales.")
+    exp_all = venta_f.copy()
+    canal_opts = ["Todos los canales"] + sorted(exp_all["Canal"].dropna().astype(str).unique().tolist())
+    exp_canal = st.selectbox("1 · Canal", canal_opts, key="exp_canal")
+    if exp_canal != "Todos los canales":
+        exp_all = exp_all[exp_all["Canal"].astype(str).eq(exp_canal)]
+
+    clientes_exp = exp_all[["Cliente", "Nom.Cliente", "Canal", "Locación"]].drop_duplicates().copy()
+    cliente_opts = {"Todos los clientes": None}
+    for _, r in clientes_exp.sort_values(["Nom.Cliente", "Cliente"]).iterrows():
+        lab = f"{fmt_entero(r['Cliente'])} - {r['Nom.Cliente']} | {r['Locación']}"
+        cliente_opts[lab] = (r["Cliente"], r["Nom.Cliente"], r["Canal"], r["Locación"])
+    exp_cliente_lab = st.selectbox("2 · Cliente", list(cliente_opts.keys()), key="exp_cliente")
+    if cliente_opts[exp_cliente_lab] is not None:
+        ecod, enom, ecan, eloc = cliente_opts[exp_cliente_lab]
+        exp_all = exp_all[
+            exp_all["Cliente"].eq(ecod) & exp_all["Nom.Cliente"].eq(enom) &
+            exp_all["Canal"].eq(ecan) & exp_all["Locación"].eq(eloc)
+        ]
+
+    productos_exp = exp_all[["Cod. Venta", "Descripción del material"]].drop_duplicates().sort_values("Cod. Venta")
+    prod_opts = {"Todos los productos": None}
+    for _, r in productos_exp.iterrows():
+        prod_opts[f"{fmt_entero(r['Cod. Venta'])} - {r['Descripción del material']}"] = r["Cod. Venta"]
+    exp_prod_lab = st.selectbox("3 · Producto", list(prod_opts.keys()), key="exp_producto")
+    if prod_opts[exp_prod_lab] is not None:
+        exp_all = exp_all[exp_all["Cod. Venta"].eq(prod_opts[exp_prod_lab])]
+
+    exp_cm = exp_all[exp_all["CM_calculada"]].copy()
+    bread = ["Empresa"]
+    if exp_canal != "Todos los canales": bread.append(exp_canal)
+    if exp_cliente_lab != "Todos los clientes": bread.append(exp_cliente_lab.split(" | ")[0])
+    if exp_prod_lab != "Todos los productos": bread.append(exp_prod_lab)
+    st.markdown(f'<div class="cmg-breadcrumb"><strong>Ruta:</strong> {" &nbsp;→&nbsp; ".join(bread)}</div>', unsafe_allow_html=True)
+
+    fact, cajas, cm, cmpct, cmcaja, cob = _metricas_scope(exp_all, exp_cm)
+    e1, e2, e3, e4, e5, e6 = st.columns(6)
+    e1.metric("Facturación", fmt_pesos(fact)); e2.metric("CM", fmt_pesos(cm)); e3.metric("CM %", f"{fmt_n(cmpct,1)}%")
+    e4.metric("Cajas", fmt_n(cajas)); e5.metric("CM/Caja", fmt_pesos(cmcaja,2)); e6.metric("Cobertura", f"{fmt_n(cob,1)}%")
+
+    exa, exb = st.columns([1.05, .95])
+    with exa:
+        titulo_panel("Evolución de la selección")
+        t = _tendencia_scope(exp_all, exp_cm)
+        if t.empty: st.info("No hay datos para esta selección.")
+        else: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+    with exb:
+        titulo_panel("4 · Componentes de costo")
+        if exp_cm.empty: st.info("No hay CM calculada para esta selección.")
+        else: st.plotly_chart(fig_costos_scope(exp_cm, top_n=15), width="stretch", theme=None, config=CONFIG_CHART)
+
+    if not exp_cm.empty:
+        titulo_panel("Cascada consolidada", "La misma lógica financiera del motor de CM, agregada para la selección actual.")
+        casc = exp_cm[COLUMNAS_CASCADA].sum()
+        filas = [{"Concepto": "Facturación Neta", "Monto": casc["Facturacion Neta"]}]
+        for c in COLUMNAS_CASCADA[1:-1]:
+            filas.append({"Concepto": f"(–) {c}", "Monto": -casc[c]})
+        filas.append({"Concepto": "= Contribución Marginal ($)", "Monto": casc["CM ($)"]})
+        df_exp_casc = pd.DataFrame(filas)
+        st.plotly_chart(fig_cascada(df_exp_casc), width="stretch", theme=None, config=CONFIG_CHART)
+
+        with st.expander("Ver detalle de la selección"):
+            cols_exp = [c for c in ["Mes", "Cliente", "Nom.Cliente", "Canal", "Locación", "Cod. Venta", "Descripción del material", "Cajas Fisicas", "Facturacion Neta", "Costo Total", "CM ($)", "CM (%)"] if c in exp_cm.columns]
+            st.dataframe(exp_cm[cols_exp], width="stretch", hide_index=True, height=450)
+            boton_descarga(exp_cm[cols_exp], "explorador_cmg.csv", "⬇️ Descargar selección")
+
+# --- Tab 7: Detalle por artículo -------------------------------------------
 with tab_articulo:
     articulos_disp = (
         venta_f[["Cod. Venta", "Descripción del material"]]
@@ -1069,7 +1546,7 @@ with tab_articulo:
                 width="stretch", hide_index=True,
             )
 
-# --- Tab 4: Calidad de datos -------------------------------------------------
+# --- Tab 8: Calidad de datos -------------------------------------------------
 with tab_calidad:
     titulo_panel("Calidad y cobertura de los datos", "Controles visibles para saber qué tan confiable es el análisis antes de tomar decisiones.")
 
@@ -1124,7 +1601,7 @@ with tab_calidad:
             )
             st.dataframe(resumen_sc, width="stretch", hide_index=True)
 
-# --- Tab 5: Datos crudos ----------------------------------------------------
+# --- Tab 9: Datos crudos ----------------------------------------------------
 with tab_crudo:
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
     hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
