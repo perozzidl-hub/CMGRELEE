@@ -1099,7 +1099,7 @@ with tab_resumen:
         cm_por_mes = venta_cm_f.groupby("Mes")["CM ($)"].sum()
         por_mes["Contribución Marginal"] = por_mes["Mes"].map(cm_por_mes).fillna(0)
         por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
-        st.plotly_chart(fig_tendencia_mensual(por_mes), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_tendencia_mensual(por_mes), width="stretch", theme=None, config=CONFIG_CHART, key="resumen_tendencia_mensual")
 
     divisor()
     col_a, col_b = st.columns(2)
@@ -1108,7 +1108,7 @@ with tab_resumen:
         if resumen_canal.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
-            st.plotly_chart(fig_barras_cm(resumen_canal, "Canal"), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_barras_cm(resumen_canal, "Canal"), width="stretch", theme=None, config=CONFIG_CHART, key="resumen_cm_canal")
             with st.expander("Ver tabla completa"):
                 st.dataframe(estilo_resumen(resumen_canal), width="stretch", hide_index=True)
                 boton_descarga(resumen_canal, "cm_por_canal.csv")
@@ -1117,7 +1117,7 @@ with tab_resumen:
         if resumen_locacion.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
-            st.plotly_chart(fig_barras_cm(resumen_locacion, "Locación"), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_barras_cm(resumen_locacion, "Locación"), width="stretch", theme=None, config=CONFIG_CHART, key="resumen_cm_locacion")
             with st.expander("Ver tabla completa"):
                 st.dataframe(estilo_resumen(resumen_locacion), width="stretch", hide_index=True)
                 boton_descarga(resumen_locacion, "cm_por_locacion.csv")
@@ -1128,23 +1128,23 @@ with tab_rentabilidad:
     if productos.empty:
         st.info("No hay productos costeados para los filtros seleccionados.")
     else:
-        st.plotly_chart(fig_matriz_rentabilidad(productos), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_matriz_rentabilidad(productos), width="stretch", theme=None, config=CONFIG_CHART, key="rentabilidad_matriz_productos")
 
         divisor()
         a, b = st.columns(2)
         with a:
             titulo_panel("Top generadores de CM", "Productos con mayor contribución marginal absoluta.")
-            st.plotly_chart(fig_ranking_productos(productos, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_ranking_productos(productos, mejores=True), width="stretch", theme=None, config=CONFIG_CHART, key="rentabilidad_top_productos")
         with b:
             titulo_panel("Productos que destruyen CM", "Los SKU con menor contribución marginal aparecen primero.")
             if (productos["CM_pesos"] < 0).any():
-                st.plotly_chart(fig_ranking_productos(productos[productos["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART)
+                st.plotly_chart(fig_ranking_productos(productos[productos["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART, key="rentabilidad_peores_productos")
             else:
                 st.success("No hay SKU con Contribución Marginal negativa para los filtros actuales.")
 
         divisor()
         titulo_panel("Pareto de generación de margen", "Muestra qué tan concentrada está la CM positiva en los principales SKU.")
-        st.plotly_chart(fig_pareto(productos), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_pareto(productos), width="stretch", theme=None, config=CONFIG_CHART, key="rentabilidad_pareto_productos")
 
         divisor()
         titulo_panel("Tabla ejecutiva de productos", "Ordená y filtrá visualmente para detectar combinaciones de volumen, margen y concentración de clientes.")
@@ -1190,7 +1190,7 @@ with tab_clientes:
         divisor()
         titulo_panel("Mapa de clientes", "Volumen en X, CM % en Y y tamaño por facturación. La visual prioriza los clientes de mayor facturación cuando hay más de 1.200 puntos.")
         fig_cli, n_cli_mapa = fig_matriz_clientes(clientes)
-        st.plotly_chart(fig_cli, width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_cli, width="stretch", theme=None, config=CONFIG_CHART, key="clientes_matriz")
         if n_cli_mapa > 1200:
             st.caption(f"La matriz muestra los 1.200 clientes de mayor facturación de {fmt_n(n_cli_mapa)} clientes con datos válidos. Los KPIs y tablas usan el universo completo.")
 
@@ -1198,11 +1198,11 @@ with tab_clientes:
         ca, cb = st.columns(2)
         with ca:
             titulo_panel("Clientes que más CM generan")
-            st.plotly_chart(fig_ranking_clientes_cmg(clientes, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_ranking_clientes_cmg(clientes, mejores=True), width="stretch", theme=None, config=CONFIG_CHART, key="clientes_top_cmg")
         with cb:
             titulo_panel("Clientes con menor CM")
             if (clientes["CM_pesos"] < 0).any():
-                st.plotly_chart(fig_ranking_clientes_cmg(clientes[clientes["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART)
+                st.plotly_chart(fig_ranking_clientes_cmg(clientes[clientes["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART, key="clientes_peores_cmg")
             else:
                 st.success("No hay clientes con CM negativa para los filtros actuales.")
 
@@ -1239,20 +1239,20 @@ with tab_clientes:
             if tendencia.empty:
                 st.info("Sin serie mensual disponible.")
             else:
-                st.plotly_chart(fig_tendencia_mensual(tendencia), width="stretch", theme=None, config=CONFIG_CHART)
+                st.plotly_chart(fig_tendencia_mensual(tendencia), width="stretch", theme=None, config=CONFIG_CHART, key="clientes_detalle_tendencia")
         with t2:
             titulo_panel("Estructura de costos")
             if cli_cm.empty:
                 st.info("El cliente no tiene filas costeadas en la selección.")
             else:
-                st.plotly_chart(fig_costos_scope(cli_cm), width="stretch", theme=None, config=CONFIG_CHART)
+                st.plotly_chart(fig_costos_scope(cli_cm), width="stretch", theme=None, config=CONFIG_CHART, key="clientes_detalle_costos")
 
         titulo_panel("Mix de productos del cliente")
         prod_cli = resumen_productos(cli_cm)
         if prod_cli.empty:
             st.info("No hay productos costeados para este cliente.")
         else:
-            st.plotly_chart(fig_mix_productos(prod_cli), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_mix_productos(prod_cli), width="stretch", theme=None, config=CONFIG_CHART, key="clientes_detalle_mix")
         with st.expander("Ver tabla completa de clientes"):
             st.dataframe(_tabla_entidad_estilo(clientes), width="stretch", hide_index=True, height=520)
             boton_descarga(clientes, "rentabilidad_clientes.csv", "⬇️ Descargar clientes")
@@ -1263,7 +1263,7 @@ with tab_canales:
     if canales_detalle.empty:
         st.info("No hay canales para los filtros seleccionados.")
     else:
-        st.plotly_chart(fig_barras_cm(canales_detalle, "Canal", top_n=20), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_barras_cm(canales_detalle, "Canal", top_n=20), width="stretch", theme=None, config=CONFIG_CHART, key="canales_cm")
         st.dataframe(_tabla_entidad_estilo(canales_detalle), width="stretch", hide_index=True)
 
         divisor()
@@ -1280,21 +1280,21 @@ with tab_canales:
         with ca:
             titulo_panel("Clientes dentro del canal")
             cli_canal = resumen_clientes_integral(canal_all, canal_cm)
-            st.plotly_chart(fig_ranking_clientes_cmg(cli_canal, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_ranking_clientes_cmg(cli_canal, mejores=True), width="stretch", theme=None, config=CONFIG_CHART, key="canales_detalle_clientes")
         with cb:
             titulo_panel("Productos dentro del canal")
             prod_canal = resumen_productos(canal_cm)
             if prod_canal.empty: st.info("Sin productos costeados.")
-            else: st.plotly_chart(fig_mix_productos(prod_canal), width="stretch", theme=None, config=CONFIG_CHART)
+            else: st.plotly_chart(fig_mix_productos(prod_canal), width="stretch", theme=None, config=CONFIG_CHART, key="canales_detalle_mix")
 
         ca, cb = st.columns(2)
         with ca:
             titulo_panel("Evolución mensual")
             t = _tendencia_scope(canal_all, canal_cm)
-            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART, key="canales_detalle_tendencia")
         with cb:
             titulo_panel("Estructura de costos")
-            if not canal_cm.empty: st.plotly_chart(fig_costos_scope(canal_cm), width="stretch", theme=None, config=CONFIG_CHART)
+            if not canal_cm.empty: st.plotly_chart(fig_costos_scope(canal_cm), width="stretch", theme=None, config=CONFIG_CHART, key="canales_detalle_costos")
         boton_descarga(canales_detalle, "rentabilidad_canales.csv", "⬇️ Descargar canales")
 
 # --- Tab 5: Locaciones ------------------------------------------------------
@@ -1303,7 +1303,7 @@ with tab_locaciones:
     if locaciones_detalle.empty:
         st.info("No hay locaciones para los filtros seleccionados.")
     else:
-        st.plotly_chart(fig_barras_cm(locaciones_detalle, "Locación", top_n=20), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_barras_cm(locaciones_detalle, "Locación", top_n=20), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_cm")
         st.dataframe(_tabla_entidad_estilo(locaciones_detalle), width="stretch", hide_index=True)
 
         divisor()
@@ -1320,21 +1320,21 @@ with tab_locaciones:
         with la:
             titulo_panel("Clientes de la locación")
             cli_loc = resumen_clientes_integral(loc_all, loc_cm)
-            st.plotly_chart(fig_ranking_clientes_cmg(cli_loc, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_ranking_clientes_cmg(cli_loc, mejores=True), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_detalle_clientes")
         with lb:
             titulo_panel("Productos de la locación")
             prod_loc = resumen_productos(loc_cm)
             if prod_loc.empty: st.info("Sin productos costeados.")
-            else: st.plotly_chart(fig_mix_productos(prod_loc), width="stretch", theme=None, config=CONFIG_CHART)
+            else: st.plotly_chart(fig_mix_productos(prod_loc), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_detalle_mix")
 
         la, lb = st.columns(2)
         with la:
             titulo_panel("Evolución mensual")
             t = _tendencia_scope(loc_all, loc_cm)
-            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+            if not t.empty: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_detalle_tendencia")
         with lb:
             titulo_panel("Estructura de costos")
-            if not loc_cm.empty: st.plotly_chart(fig_costos_scope(loc_cm), width="stretch", theme=None, config=CONFIG_CHART)
+            if not loc_cm.empty: st.plotly_chart(fig_costos_scope(loc_cm), width="stretch", theme=None, config=CONFIG_CHART, key="locaciones_detalle_costos")
         boton_descarga(locaciones_detalle, "rentabilidad_locaciones.csv", "⬇️ Descargar locaciones")
 
 # --- Tab 6: Explorador jerárquico -----------------------------------------
@@ -1384,11 +1384,11 @@ with tab_explorador:
         titulo_panel("Evolución de la selección")
         t = _tendencia_scope(exp_all, exp_cm)
         if t.empty: st.info("No hay datos para esta selección.")
-        else: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART)
+        else: st.plotly_chart(fig_tendencia_mensual(t), width="stretch", theme=None, config=CONFIG_CHART, key="explorador_tendencia")
     with exb:
         titulo_panel("4 · Componentes de costo")
         if exp_cm.empty: st.info("No hay CM calculada para esta selección.")
-        else: st.plotly_chart(fig_costos_scope(exp_cm, top_n=15), width="stretch", theme=None, config=CONFIG_CHART)
+        else: st.plotly_chart(fig_costos_scope(exp_cm, top_n=15), width="stretch", theme=None, config=CONFIG_CHART, key="explorador_costos")
 
     if not exp_cm.empty:
         titulo_panel("Cascada consolidada", "La misma lógica financiera del motor de CM, agregada para la selección actual.")
@@ -1398,7 +1398,7 @@ with tab_explorador:
             filas.append({"Concepto": f"(–) {c}", "Monto": -casc[c]})
         filas.append({"Concepto": "= Contribución Marginal ($)", "Monto": casc["CM ($)"]})
         df_exp_casc = pd.DataFrame(filas)
-        st.plotly_chart(fig_cascada(df_exp_casc), width="stretch", theme=None, config=CONFIG_CHART)
+        st.plotly_chart(fig_cascada(df_exp_casc), width="stretch", theme=None, config=CONFIG_CHART, key="explorador_cascada")
 
         with st.expander("Ver detalle de la selección"):
             cols_exp = [c for c in ["Mes", "Cliente", "Nom.Cliente", "Canal", "Locación", "Cod. Venta", "Descripción del material", "Cajas Fisicas", "Facturacion Neta", "Costo Total", "CM ($)", "CM (%)"] if c in exp_cm.columns]
@@ -1470,7 +1470,7 @@ with tab_articulo:
             df_cascada = pd.DataFrame(filas_cascada)
 
             with st.container(border=True):
-                st.plotly_chart(fig_cascada(df_cascada), width="stretch", theme=None, config=CONFIG_CHART)
+                st.plotly_chart(fig_cascada(df_cascada), width="stretch", theme=None, config=CONFIG_CHART, key="articulo_cascada")
                 st.dataframe(estilo_cascada(df_cascada), width="stretch", hide_index=True)
 
         divisor()
@@ -1496,7 +1496,7 @@ with tab_articulo:
         else:
             st.plotly_chart(
                 fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
-                width="stretch", theme=None, config=CONFIG_CHART,
+                width="stretch", theme=None, config=CONFIG_CHART, key="articulo_top_clientes",
             )
 
             with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
