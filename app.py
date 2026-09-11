@@ -5,9 +5,19 @@ Streamlit app para navegar al máximo nivel de detalle la venta (clientes,
 locaciones, canales) y la Contribución Marginal calculada para cada
 artículo, cliente, locación y canal.
 
-Capa visual (paleta corporativa, tooltips, gráficos con Plotly) actualizada.
-La carga de datos y el cálculo de CM (data_loader.py / calculo_cmg.py) no
-se modificaron.
+CORRECCIONES respecto de la versión anterior:
+  1. Tab "Datos crudos": se elimina el Styler que crasheaba (fmt_entero
+     explotaba con códigos de cliente en formato texto). Ahora la columna
+     "Cliente" se convierte a entero nullable (Int64) ANTES de mostrarla,
+     y se renderiza con st.dataframe plano.
+  2. fig_top_clientes: len(codigos) devolvía la cantidad de filas, no el
+     largo del string. Truncado de etiquetas reescrito de forma vectorizada.
+  3. Tendencia mensual: la CM se alinea por mes con .map(), no por posición.
+  4. Tab artículo: st.stop() reemplazado por un if/else (ya no mata los
+     demás tabs cuando no hay artículos para el filtro).
+  5. fmt_n / fmt_pesos / fmt_entero: robustos ante strings, None y NaN.
+  6. CM_%: división protegida contra Facturación Neta = 0.
+  7. Insumos de artículo R: columnas filtradas por las que realmente existen.
 
 Ejecutar con:
     streamlit run app.py
@@ -53,11 +63,25 @@ PLOTLY_BASE = dict(
 # ----------------------------------------------------------------------
 # FORMATO NUMÉRICO (criterio local: miles con ".", decimales con ",")
 # ----------------------------------------------------------------------
+def _es_vacio(valor) -> bool:
+    """True si el valor es None o NaN (escalar)."""
+    if valor is None:
+        return True
+    try:
+        return bool(pd.isna(valor))
+    except (TypeError, ValueError):
+        return False
+
+
 def fmt_n(valor, decimales=0):
-    """Número con criterio local: miles con ".", decimales con ",". NaN -> "—"."""
-    if pd.isna(valor):
+    """Número con criterio local: miles con ".", decimales con ",". NaN -> "—".
+    Robusto: si el valor no es numérico, lo devuelve como texto en vez de explotar."""
+    if _es_vacio(valor):
         return "—"
-    s = f"{valor:,.{decimales}f}"
+    try:
+        s = f"{float(valor):,.{decimales}f}"
+    except (ValueError, TypeError):
+        return str(valor)
     return s.replace(",", "§").replace(".", ",").replace("§", ".")
 
 
@@ -66,10 +90,14 @@ def fmt_pesos(valor, decimales=0):
 
 
 def fmt_entero(valor):
-    """Códigos de cliente: siempre enteros, sin decimales."""
-    if pd.isna(valor):
+    """Códigos de cliente: siempre enteros, sin decimales.
+    Robusto: ante texto no numérico devuelve el texto original (no explota)."""
+    if _es_vacio(valor):
         return "—"
-    return str(int(round(float(valor))))
+    try:
+        return str(int(round(float(valor))))
+    except (ValueError, TypeError):
+        return str(valor)
 
 
 def aplicar_estilos():
@@ -156,9 +184,9 @@ def _lerp(c1, c2, t):
 def _color_semaforo(valor, vmin, vmax):
     """Color relativo (rojo->dorado->verde) del valor DENTRO de esta tabla puntual.
     No es un benchmark de negocio: solo ordena visualmente lo que ya está en pantalla."""
-    if pd.isna(valor) or vmax == vmin:
+    if _es_vacio(valor) or vmax == vmin:
         return ""
-    t = max(0.0, min(1.0, (valor - vmin) / (vmax - vmin)))
+    t = max(0.0, min(1.0, (float(valor) - vmin) / (vmax - vmin)))
     if t < 0.5:
         r, g, b = _lerp(_ROJO_RGB, _DORADO_RGB, t / 0.5)
     else:
@@ -199,13 +227,15 @@ def estilo_cascada(df_cascada):
     return df_cascada.style.format({"Monto": fmt_pesos}, na_rep="—").apply(_fila, axis=1)
 
 
-def estilo_codigo_cliente_entero(df):
-    """Tab 'Datos crudos': muestra la hoja tal cual, salvo el código de
-    cliente, que siempre se ve como entero."""
-    styler = df.style
+def preparar_hoja_cruda(df: pd.DataFrame) -> pd.DataFrame:
+    """Tab 'Datos crudos': devuelve la hoja tal cual, salvo la columna
+    'Cliente', que se convierte a entero nullable (Int64) para que se vea
+    siempre como entero SIN usar Styler (el Styler con fmt_entero crasheaba
+    al renderizar cuando los códigos venían como texto)."""
+    df = df.copy()
     if "Cliente" in df.columns:
-        styler = styler.format({"Cliente": fmt_entero}, na_rep="—")
-    return styler
+        df["Cliente"] = pd.to_numeric(df["Cliente"], errors="coerce").astype("Int64")
+    return df
 
 
 def boton_descarga(df, nombre_archivo, label="⬇️ Descargar CSV"):
@@ -286,14 +316,16 @@ def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
     # Etiqueta SIEMPRE "código - nombre": un mismo nombre con distinto código
     # es una boca distinta y tiene que verse como cliente distinto.
     nombres = d["Nom.Cliente"].fillna("").astype(str)
-    codigos = d["Cliente"].map(fmt_entero)  # código siempre entero
-    etiqueta = (codigos + " - " + nombres)
-    # Truncar el nombre (no el código) para que el margen izquierdo no se dispare.
+    codigos = d["Cliente"].map(fmt_entero)  # Series de strings
+    # CORREGIDO: antes se usaba len(codigos), que devuelve la cantidad de
+    # filas, no el largo de cada código. Ahora es vectorizado por fila.
     max_largo = 32
-    etiqueta = etiqueta.where(
-        etiqueta.str.len() <= max_largo,
-        codigos + " - " + nombres.str.slice(0, max_largo - len(codigos) - 4) + "…",
+    limite_nombre = (max_largo - codigos.str.len() - 4).clip(lower=8)
+    nombres_cortos = nombres.where(
+        nombres.str.len() <= limite_nombre,
+        nombres.str.slice(0, limite_nombre) + "…",
     )
+    etiqueta = codigos + " - " + nombres_cortos
 
     if titulo_eje_x is None:
         titulo_eje_x = "Contribución Marginal ($)" if columna_valor == "CM_pesos" else "Facturación Neta ($)"
@@ -424,7 +456,8 @@ def resumen_cm(df: pd.DataFrame, agrupar_por) -> pd.DataFrame:
         CM_pesos=("CM ($)", "sum"),
         Clientes=("Cliente", "nunique"),
     )
-    g["CM_%"] = (g["CM_pesos"] / g["Facturacion_Neta"] * 100).round(1)
+    # División protegida: si una agrupación tiene Facturación Neta = 0, CM_% queda vacío.
+    g["CM_%"] = (g["CM_pesos"] / g["Facturacion_Neta"].replace(0, pd.NA) * 100).round(1)
     return g.sort_values("CM_pesos", ascending=False)
 
 
@@ -448,7 +481,8 @@ with tab_resumen:
         "Contribución Marginal", fmt_pesos(cm_total),
         help="Suma de la Contribución Marginal solo de las filas con regla de costeo definida (Tipo P o R).",
     )
-    cm_pct = cm_total / venta_cm_f["Facturacion Neta"].sum() * 100 if len(venta_cm_f) else 0
+    fact_cm = venta_cm_f["Facturacion Neta"].sum()
+    cm_pct = cm_total / fact_cm * 100 if fact_cm else 0.0
     c3.metric(
         "CM % (ponderado)", f"{fmt_n(cm_pct, 1)}%",
         help="CM total dividida por la Facturación Neta de las filas con CM calculada (no por el total general de la primera tarjeta).",
@@ -461,11 +495,14 @@ with tab_resumen:
     divisor()
     titulo_panel("Tendencia mensual", "Evolución de la Facturación Neta y la Contribución Marginal, mes a mes.")
     por_mes = venta_f.groupby("Mes", as_index=False)["Facturacion Neta"].sum()
-    por_mes["Contribución Marginal"] = venta_cm_f.groupby("Mes")["CM ($)"].sum().values
-    por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
     if por_mes.empty:
         st.info("No hay datos para los filtros seleccionados.")
     else:
+        # CORREGIDO: antes se asignaba .values por posición y, si faltaba un
+        # mes en venta_cm_f, la CM se desalineaba. Ahora se alinea por mes.
+        cm_por_mes = venta_cm_f.groupby("Mes")["CM ($)"].sum()
+        por_mes["Contribución Marginal"] = por_mes["Mes"].map(cm_por_mes).fillna(0)
+        por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
         st.plotly_chart(fig_tendencia_mensual(por_mes), width="stretch", theme=None, config=CONFIG_CHART)
 
     divisor()
@@ -498,139 +535,149 @@ with tab_articulo:
         .drop_duplicates()
         .sort_values("Cod. Venta")
     )
+    # CORREGIDO: antes había un st.stop() acá, que cortaba TODA la app
+    # (incluido el tab de datos crudos). Ahora solo se oculta el contenido.
     if articulos_disp.empty:
         st.warning("No hay artículos para los filtros seleccionados.")
-        st.stop()
-
-    opciones = {
-        f"{row['Cod. Venta']} - {row['Descripción del material']}": row["Cod. Venta"]
-        for _, row in articulos_disp.iterrows()
-    }
-    elegido = st.selectbox("Elegí un artículo", options=list(opciones.keys()))
-    cod = opciones[elegido]
-
-    v_art = venta_f[venta_f["Cod. Venta"] == cod]
-    info_art = maestro[maestro["Cod. Venta"] == cod]
-    tipo_prod = info_art["Tipo de Prod."].iloc[0] if not info_art.empty else "?"
-    calculable = tipo_prod in ("P", "R")
-
-    st.markdown(
-        f'<span class="cmg-panel-titulo" style="font-size:1.15rem;">Artículo {cod} &nbsp;{badge_tipo_prod(tipo_prod)}</span>',
-        unsafe_allow_html=True,
-    )
-    st.caption("P = artículo propio, R = artículo de reventa.")
-    if not calculable:
-        st.warning(
-            f"Tipo de producto '{tipo_prod}' todavía no tiene regla de costeo "
-            "(solo P y R están definidos) — se muestra la venta, sin CM."
-        )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(
-        "Facturación Neta", fmt_pesos(v_art["Facturacion Neta"].sum()),
-        help="Facturación neta de este artículo en el período y los filtros seleccionados.",
-    )
-    c2.metric(
-        "Cajas Físicas", fmt_n(v_art["Cajas Fisicas"].sum()),
-        help="Cajas físicas vendidas de este artículo en el período y los filtros seleccionados.",
-    )
-    if calculable:
-        cm_art = v_art["CM ($)"].sum()
-        cm_pct_art = cm_art / v_art["Facturacion Neta"].sum() * 100
-        c3.metric("Contribución Marginal", fmt_pesos(cm_art))
-        c4.metric("CM %", f"{fmt_n(cm_pct_art, 1)}%")
     else:
-        c3.metric("Contribución Marginal", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
-        c4.metric("CM %", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
+        opciones = {
+            f"{row['Cod. Venta']} - {row['Descripción del material']}": row["Cod. Venta"]
+            for _, row in articulos_disp.iterrows()
+        }
+        elegido = st.selectbox("Elegí un artículo", options=list(opciones.keys()))
+        cod = opciones[elegido]
 
-    if calculable:
+        v_art = venta_f[venta_f["Cod. Venta"] == cod]
+        info_art = maestro[maestro["Cod. Venta"] == cod]
+        tipo_prod = info_art["Tipo de Prod."].iloc[0] if not info_art.empty else "?"
+        calculable = tipo_prod in ("P", "R")
+
+        st.markdown(
+            f'<span class="cmg-panel-titulo" style="font-size:1.15rem;">Artículo {cod} &nbsp;{badge_tipo_prod(tipo_prod)}</span>',
+            unsafe_allow_html=True,
+        )
+        st.caption("P = artículo propio, R = artículo de reventa.")
+        if not calculable:
+            st.warning(
+                f"Tipo de producto '{tipo_prod}' todavía no tiene regla de costeo "
+                "(solo P y R están definidos) — se muestra la venta, sin CM."
+            )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Facturación Neta", fmt_pesos(v_art["Facturacion Neta"].sum()),
+            help="Facturación neta de este artículo en el período y los filtros seleccionados.",
+        )
+        c2.metric(
+            "Cajas Físicas", fmt_n(v_art["Cajas Fisicas"].sum()),
+            help="Cajas físicas vendidas de este artículo en el período y los filtros seleccionados.",
+        )
+        if calculable:
+            cm_art = v_art["CM ($)"].sum()
+            fact_art = v_art["Facturacion Neta"].sum()
+            cm_pct_art = cm_art / fact_art * 100 if fact_art else 0.0
+            c3.metric("Contribución Marginal", fmt_pesos(cm_art))
+            c4.metric("CM %", f"{fmt_n(cm_pct_art, 1)}%")
+        else:
+            c3.metric("Contribución Marginal", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
+            c4.metric("CM %", "—", help="No disponible: este tipo de producto todavía no tiene regla de costeo.")
+
+        if calculable:
+            divisor()
+            titulo_panel("Cascada de Contribución Marginal", "De la Facturación Neta a la Contribución Marginal, paso a paso, para este artículo.")
+            cascada = v_art[COLUMNAS_CASCADA].sum()
+            filas_cascada = [{"Concepto": "Facturación Neta", "Monto": cascada["Facturacion Neta"]}]
+            for c in COLUMNAS_CASCADA[1:-1]:
+                filas_cascada.append({"Concepto": f"(–) {c}", "Monto": -cascada[c]})
+            filas_cascada.append({"Concepto": "= Contribución Marginal ($)", "Monto": cascada["CM ($)"]})
+            df_cascada = pd.DataFrame(filas_cascada)
+
+            with st.container(border=True):
+                st.plotly_chart(fig_cascada(df_cascada), width="stretch", theme=None, config=CONFIG_CHART)
+                st.dataframe(estilo_cascada(df_cascada), width="stretch", hide_index=True)
+
         divisor()
-        titulo_panel("Cascada de Contribución Marginal", "De la Facturación Neta a la Contribución Marginal, paso a paso, para este artículo.")
-        cascada = v_art[COLUMNAS_CASCADA].sum()
-        filas_cascada = [{"Concepto": "Facturación Neta", "Monto": cascada["Facturacion Neta"]}]
-        for c in COLUMNAS_CASCADA[1:-1]:
-            filas_cascada.append({"Concepto": f"(–) {c}", "Monto": -cascada[c]})
-        filas_cascada.append({"Concepto": "= Contribución Marginal ($)", "Monto": cascada["CM ($)"]})
-        df_cascada = pd.DataFrame(filas_cascada)
-
-        with st.container(border=True):
-            st.plotly_chart(fig_cascada(df_cascada), width="stretch", theme=None, config=CONFIG_CHART)
-            st.dataframe(estilo_cascada(df_cascada), width="stretch", hide_index=True)
-
-    divisor()
-    titulo_panel("Detalle por Cliente")
-    cols_cliente = ["Cliente", "Nom.Cliente", "Canal", "Locación"]
-    agg_cliente = dict(
-        Cajas_Fisicas=("Cajas Fisicas", "sum"), Facturacion_Neta=("Facturacion Neta", "sum")
-    )
-    if calculable:
-        agg_cliente["CM_pesos"] = ("CM ($)", "sum")
-    por_cliente = v_art.groupby(cols_cliente, as_index=False).agg(**agg_cliente)
-    if calculable:
-        por_cliente["CM_%"] = (por_cliente["CM_pesos"] / por_cliente["Facturacion_Neta"] * 100).round(1)
-    por_cliente = por_cliente.sort_values("Facturacion_Neta", ascending=False)
-
-    columna_top = "CM_pesos" if calculable else "Facturacion_Neta"
-    etiqueta_top = "Contribución Marginal" if calculable else "Facturación Neta"
-    st.caption(f"Top {min(10, len(por_cliente))} clientes por {etiqueta_top}")
-    st.plotly_chart(
-        fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
-        width="stretch", theme=None, config=CONFIG_CHART,
-    )
-
-    with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
-        st.dataframe(estilo_resumen(por_cliente) if calculable else por_cliente, width="stretch", hide_index=True)
-        boton_descarga(por_cliente, f"detalle_clientes_{cod}.csv")
-
-    divisor()
-    col_a, col_b = st.columns(2)
-    with col_a:
-        titulo_panel("Resumen por Locación")
-        st.dataframe(
-            estilo_resumen(resumen_cm(v_art, "Locación")) if calculable
-            else v_art.groupby("Locación", as_index=False)["Facturacion Neta"].sum(),
-            width="stretch", hide_index=True,
+        titulo_panel("Detalle por Cliente")
+        cols_cliente = ["Cliente", "Nom.Cliente", "Canal", "Locación"]
+        agg_cliente = dict(
+            Cajas_Fisicas=("Cajas Fisicas", "sum"), Facturacion_Neta=("Facturacion Neta", "sum")
         )
-    with col_b:
-        titulo_panel("Resumen por Canal")
-        st.dataframe(
-            estilo_resumen(resumen_cm(v_art, "Canal")) if calculable
-            else v_art.groupby("Canal", as_index=False)["Facturacion Neta"].sum(),
-            width="stretch", hide_index=True,
-        )
+        if calculable:
+            agg_cliente["CM_pesos"] = ("CM ($)", "sum")
+        por_cliente = v_art.groupby(cols_cliente, as_index=False).agg(**agg_cliente)
+        if calculable:
+            por_cliente["CM_%"] = (
+                por_cliente["CM_pesos"] / por_cliente["Facturacion_Neta"].replace(0, pd.NA) * 100
+            ).round(1)
+        por_cliente = por_cliente.sort_values("Facturacion_Neta", ascending=False)
 
-    st.divider()
-    with st.expander("Ver los insumos de costo que alimentan este cálculo"):
-        if tipo_prod == "P":
-            st.caption("Artículo propio (P) → composición por insumos, hoja Receta:")
-            st.dataframe(receta[receta["Cod. Venta"] == cod], width="stretch", hide_index=True)
-            mo_art = mo[mo["Cod. Venta"] == cod]
-            if not mo_art.empty:
-                st.caption("Mano de Obra (hoja MO):")
-                st.dataframe(mo_art, width="stretch", hide_index=True)
-        elif tipo_prod == "R":
-            st.caption("Artículo de reventa (R) → costo de compra, hoja Receta:")
+        columna_top = "CM_pesos" if calculable else "Facturacion_Neta"
+        etiqueta_top = "Contribución Marginal" if calculable else "Facturación Neta"
+        st.caption(f"Top {min(10, len(por_cliente))} clientes por {etiqueta_top}")
+        if por_cliente.empty:
+            st.info("No hay ventas de este artículo para los filtros seleccionados.")
+        else:
+            st.plotly_chart(
+                fig_top_clientes(por_cliente, columna_top, titulo_eje_x=etiqueta_top + " ($)"),
+                width="stretch", theme=None, config=CONFIG_CHART,
+            )
+
+            with st.expander(f"Ver el detalle completo de los {len(por_cliente)} clientes"):
+                st.dataframe(estilo_resumen(por_cliente) if calculable else por_cliente, width="stretch", hide_index=True)
+                boton_descarga(por_cliente, f"detalle_clientes_{cod}.csv")
+
+        divisor()
+        col_a, col_b = st.columns(2)
+        with col_a:
+            titulo_panel("Resumen por Locación")
             st.dataframe(
-                receta[receta["Cod. Venta"] == cod][
-                    ["Mes", "Costo Compra ($)", "Desperdicio PT (%)", "Desperdicio PT ($)"]
-                ],
+                estilo_resumen(resumen_cm(v_art, "Locación")) if calculable
+                else v_art.groupby("Locación", as_index=False)["Facturacion Neta"].sum(),
                 width="stretch", hide_index=True,
             )
-            st.caption("Flete T0 (ir a buscar el producto), hoja FletesT0:")
-            st.dataframe(fletest0[fletest0["Cod. Venta"] == cod], width="stretch", hide_index=True)
+        with col_b:
+            titulo_panel("Resumen por Canal")
+            st.dataframe(
+                estilo_resumen(resumen_cm(v_art, "Canal")) if calculable
+                else v_art.groupby("Canal", as_index=False)["Facturacion Neta"].sum(),
+                width="stretch", hide_index=True,
+            )
 
-        st.caption("Datos por Locación aplicables (hoja DatosxLocacion):")
-        st.dataframe(
-            dxl[dxl["Locación"].isin(v_art["Locación"].unique())],
-            width="stretch", hide_index=True,
-        )
+        st.divider()
+        with st.expander("Ver los insumos de costo que alimentan este cálculo"):
+            if tipo_prod == "P":
+                st.caption("Artículo propio (P) → composición por insumos, hoja Receta:")
+                st.dataframe(receta[receta["Cod. Venta"] == cod], width="stretch", hide_index=True)
+                mo_art = mo[mo["Cod. Venta"] == cod]
+                if not mo_art.empty:
+                    st.caption("Mano de Obra (hoja MO):")
+                    st.dataframe(mo_art, width="stretch", hide_index=True)
+            elif tipo_prod == "R":
+                st.caption("Artículo de reventa (R) → costo de compra, hoja Receta:")
+                rec_r = receta[receta["Cod. Venta"] == cod]
+                # CORREGIDO: solo se seleccionan las columnas que realmente
+                # existen (antes un nombre distinto en el Excel tiraba KeyError).
+                cols_r = ["Mes", "Costo Compra ($)", "Desperdicio PT (%)", "Desperdicio PT ($)"]
+                cols_r = [c for c in cols_r if c in rec_r.columns]
+                st.dataframe(rec_r[cols_r] if cols_r else rec_r, width="stretch", hide_index=True)
+                st.caption("Flete T0 (ir a buscar el producto), hoja FletesT0:")
+                st.dataframe(fletest0[fletest0["Cod. Venta"] == cod], width="stretch", hide_index=True)
+
+            st.caption("Datos por Locación aplicables (hoja DatosxLocacion):")
+            st.dataframe(
+                dxl[dxl["Locación"].isin(v_art["Locación"].unique())],
+                width="stretch", hide_index=True,
+            )
 
 # --- Tab 3: Datos crudos ----------------------------------------------------
 with tab_crudo:
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
     hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
-    df_hoja = opciones_hojas[hoja]
-    st.dataframe(estilo_codigo_cliente_entero(df_hoja), width="stretch")
+    # CORREGIDO: ya no se usa Styler (crasheaba al renderizar porque
+    # fmt_entero explotaba con códigos de cliente en formato texto).
+    # Ahora la columna "Cliente" se convierte a Int64 y se muestra directo.
+    df_hoja = preparar_hoja_cruda(opciones_hojas[hoja])
+    st.dataframe(df_hoja, width="stretch")
     col_info, col_btn = st.columns([3, 1])
     col_info.caption(f"{fmt_n(df_hoja.shape[0])} filas x {df_hoja.shape[1]} columnas")
     with col_btn:
