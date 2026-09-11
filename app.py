@@ -145,6 +145,21 @@ def aplicar_estilos():
         [data-testid="stSpinner"] {{ color: {CARBON}; font-weight: 500; }}
         .stButton > button, .stDownloadButton > button {{ border-radius: 6px; font-weight: 600; }}
 
+        .cmg-section-label {{
+            text-transform: uppercase; letter-spacing: .08em; font-size: .72rem;
+            font-weight: 700; color: {GRIS_TEXTO}; margin-bottom: 3px;
+        }}
+        .cmg-insight {{
+            background: {BLANCO}; border: 1px solid {GRIS_BORDE}; border-radius: 10px;
+            padding: 14px 16px; min-height: 92px; height: 100%;
+        }}
+        .cmg-insight strong {{ color: {CARBON}; font-size: .92rem; }}
+        .cmg-insight p {{ color: {GRIS_TEXTO}; margin: 5px 0 0 0; font-size: .84rem; line-height: 1.35; }}
+        .cmg-status-ok {{ color: {VERDE}; font-weight: 700; }}
+        .cmg-status-warn {{ color: {DORADO}; font-weight: 700; }}
+        .cmg-status-bad {{ color: {ROJO}; font-weight: 700; }}
+        .cmg-kpi-caption {{ color: {GRIS_TEXTO}; font-size: .74rem; margin-top: -8px; }}
+
         @media (max-width: 640px) {{
             div[data-testid="column"] {{ width: 100% !important; flex: 1 1 100% !important; }}
         }}
@@ -355,6 +370,176 @@ def fig_top_clientes(por_cliente, columna_valor, top_n=10, titulo_eje_x=None):
     return fig
 
 
+def _delta_pct(actual, anterior):
+    """Variación porcentual segura. Devuelve None si no hay base comparable."""
+    try:
+        actual = float(actual)
+        anterior = float(anterior)
+    except (TypeError, ValueError):
+        return None
+    if anterior == 0 or pd.isna(anterior):
+        return None
+    return (actual / anterior - 1) * 100
+
+
+def _delta_pp(actual, anterior):
+    try:
+        return float(actual) - float(anterior)
+    except (TypeError, ValueError):
+        return None
+
+
+def _texto_delta(valor, sufijo="%"):
+    if valor is None or pd.isna(valor):
+        return None
+    signo = "+" if valor > 0 else ""
+    return f"{signo}{fmt_n(valor, 1)}{sufijo} vs período anterior"
+
+
+def fig_barras_cm(df, categoria, top_n=10):
+    """Barras divergentes de CM: admite correctamente valores negativos."""
+    d = df.copy().sort_values("CM_pesos", ascending=False)
+    if len(d) > top_n:
+        # Conserva los extremos: mejores y peores, evitando esconder CM negativa.
+        n_pos = max(1, top_n // 2)
+        n_neg = top_n - n_pos
+        idx = list(d.head(n_pos).index) + list(d.tail(n_neg).index)
+        d = d.loc[list(dict.fromkeys(idx))].sort_values("CM_pesos", ascending=True)
+    else:
+        d = d.sort_values("CM_pesos", ascending=True)
+
+    colores = [VERDE if v >= 0 else ROJO for v in d["CM_pesos"]]
+    custom = d[["Facturacion_Neta", "CM_%", "Cajas_Fisicas"]].to_numpy()
+    fig = go.Figure(go.Bar(
+        x=d["CM_pesos"], y=d[categoria].astype(str), orientation="h",
+        marker=dict(color=colores),
+        customdata=custom,
+        hovertemplate=(
+            "<b>%{y}</b><br>CM: $ %{x:,.0f}<br>"
+            "Facturación: $ %{customdata[0]:,.0f}<br>"
+            "CM %: %{customdata[1]:.1f}%<br>"
+            "Cajas: %{customdata[2]:,.0f}<extra></extra>"
+        ),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(310, 34 * len(d)), showlegend=False,
+        xaxis=dict(title="Contribución Marginal ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=8, r=25, t=20, b=35),
+    )
+    fig.add_vline(x=0, line_width=1, line_color=CARBON)
+    return fig
+
+
+def fig_matriz_rentabilidad(productos):
+    """Matriz volumen x rentabilidad. Cada burbuja es un SKU."""
+    d = productos.copy()
+    d = d[(d["Cajas_Fisicas"] > 0) & d["CM_%"].notna()].copy()
+    if d.empty:
+        return go.Figure()
+
+    # Tamaño acotado para que una venta extrema no opaque todo el gráfico.
+    fact_pos = d["Facturacion_Neta"].clip(lower=0)
+    max_fact = fact_pos.max()
+    tamanos = 12 + (fact_pos / max_fact * 34 if max_fact else 0)
+    colores = [VERDE if v >= 0 else ROJO for v in d["CM_%"]]
+    custom = d[["Cod. Venta", "Descripción del material", "Facturacion_Neta", "CM_pesos"]].to_numpy()
+
+    fig = go.Figure(go.Scatter(
+        x=d["Cajas_Fisicas"], y=d["CM_%"], mode="markers",
+        marker=dict(size=tamanos, color=colores, opacity=0.68, line=dict(width=1, color=BLANCO)),
+        customdata=custom,
+        hovertemplate=(
+            "<b>%{customdata[0]} - %{customdata[1]}</b><br>"
+            "Cajas: %{x:,.0f}<br>CM %: %{y:.1f}%<br>"
+            "Facturación: $ %{customdata[2]:,.0f}<br>CM: $ %{customdata[3]:,.0f}<extra></extra>"
+        ),
+    ))
+    med_x = d["Cajas_Fisicas"].median()
+    med_y = d["CM_%"].median()
+    fig.add_vline(x=med_x, line_dash="dot", line_color=GRIS_TEXTO, opacity=.65)
+    fig.add_hline(y=med_y, line_dash="dot", line_color=GRIS_TEXTO, opacity=.65)
+    fig.add_hline(y=0, line_width=1.4, line_color=ROJO, opacity=.75)
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=470,
+        xaxis=dict(title="Volumen (Cajas Físicas)", gridcolor=GRIS_BORDE, tickformat=",.0f"),
+        yaxis=dict(title="CM %", gridcolor=GRIS_BORDE, ticksuffix="%"),
+        margin=dict(l=15, r=15, t=25, b=45),
+        showlegend=False,
+    )
+    return fig
+
+
+def fig_ranking_productos(productos, mejores=True, top_n=10):
+    d = productos.copy()
+    if mejores:
+        d = d.nlargest(top_n, "CM_pesos").sort_values("CM_pesos", ascending=True)
+    else:
+        d = d.nsmallest(top_n, "CM_pesos").sort_values("CM_pesos", ascending=False)
+
+    etiquetas = []
+    for _, row in d.iterrows():
+        desc = str(row.get("Descripción del material", ""))
+        if len(desc) > 30:
+            desc = desc[:29] + "…"
+        etiquetas.append(f"{fmt_entero(row['Cod. Venta'])} - {desc}")
+    color = VERDE if mejores else ROJO
+    fig = go.Figure(go.Bar(
+        x=d["CM_pesos"], y=etiquetas, orientation="h", marker=dict(color=color),
+        customdata=d[["CM_%", "Facturacion_Neta", "Cajas_Fisicas"]].to_numpy(),
+        hovertemplate=(
+            "<b>%{y}</b><br>CM: $ %{x:,.0f}<br>CM %: %{customdata[0]:.1f}%<br>"
+            "Facturación: $ %{customdata[1]:,.0f}<br>Cajas: %{customdata[2]:,.0f}<extra></extra>"
+        ),
+    ))
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=max(330, 33 * len(d)), showlegend=False,
+        xaxis=dict(title="Contribución Marginal ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis=dict(title=None, automargin=True),
+        margin=dict(l=8, r=25, t=15, b=35),
+    )
+    return fig
+
+
+def fig_pareto(productos):
+    """Pareto sobre CM positiva para mostrar concentración de generación de margen."""
+    d = productos[productos["CM_pesos"] > 0].copy().sort_values("CM_pesos", ascending=False)
+    if d.empty:
+        return go.Figure()
+    d["Acum_%"] = d["CM_pesos"].cumsum() / d["CM_pesos"].sum() * 100
+    d = d.head(min(30, len(d))).copy()
+    etiquetas = d["Cod. Venta"].map(fmt_entero)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=etiquetas, y=d["CM_pesos"], name="CM ($)", marker=dict(color=CARBON)))
+    fig.add_trace(go.Scatter(
+        x=etiquetas, y=d["Acum_%"], name="CM acumulada %", yaxis="y2",
+        mode="lines+markers", line=dict(color=ROJO, width=2), marker=dict(size=5),
+    ))
+    fig.add_hline(y=80, yref="y2", line_dash="dot", line_color=DORADO)
+    fig.update_layout(**PLOTLY_BASE)
+    fig.update_layout(
+        height=390, hovermode="x unified",
+        xaxis=dict(title="SKU (ordenados por CM)", tickangle=-45),
+        yaxis=dict(title="CM ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        yaxis2=dict(title="Acumulado", overlaying="y", side="right", range=[0, 105], ticksuffix="%"),
+        legend=dict(orientation="h", y=1.08),
+        margin=dict(l=10, r=10, t=45, b=80),
+    )
+    return fig
+
+
+def tarjeta_insight(titulo, texto, estado="info"):
+    clase = {"ok": "cmg-status-ok", "warn": "cmg-status-warn", "bad": "cmg-status-bad"}.get(estado, "")
+    st.markdown(
+        f'<div class="cmg-insight"><strong class="{clase}">{titulo}</strong><p>{texto}</p></div>',
+        unsafe_allow_html=True,
+    )
+
+
 aplicar_estilos()
 
 CONFIG_CHART = {"displayModeBar": False}
@@ -456,41 +641,62 @@ if n_sin_costeo:
     )
 
 # ----------------------------------------------------------------------
-# Filtros globales (barra lateral) — sin cambios
+# FILTROS GLOBALES
 # ----------------------------------------------------------------------
 st.sidebar.header("Filtros")
 
 meses_disp = sorted(venta_cm["Mes"].dropna().unique())
-meses_sel = st.sidebar.multiselect(
-    "Mes",
-    options=meses_disp,
-    default=meses_disp,
-    format_func=lambda m: pd.Timestamp(m).strftime("%Y-%m"),
-)
-locaciones_sel = st.sidebar.multiselect(
-    "Locación", options=sorted(venta_cm["Locación"].dropna().unique())
-)
-canales_sel = st.sidebar.multiselect(
-    "Canal", options=sorted(venta_cm["Canal"].dropna().unique())
-)
+locaciones_disp = sorted(venta_cm["Locación"].dropna().unique())
+canales_disp = sorted(venta_cm["Canal"].dropna().unique())
 
-venta_f = venta_cm[venta_cm["Mes"].isin(meses_sel)]
+# Estado persistente: los botones limpian/restablecen filtros sin tocar el uploader.
+if "filtro_meses" not in st.session_state:
+    st.session_state.filtro_meses = list(meses_disp)
+else:
+    st.session_state.filtro_meses = [m for m in st.session_state.filtro_meses if m in meses_disp]
+if "filtro_locaciones" not in st.session_state:
+    st.session_state.filtro_locaciones = []
+else:
+    st.session_state.filtro_locaciones = [x for x in st.session_state.filtro_locaciones if x in locaciones_disp]
+if "filtro_canales" not in st.session_state:
+    st.session_state.filtro_canales = []
+else:
+    st.session_state.filtro_canales = [x for x in st.session_state.filtro_canales if x in canales_disp]
+
+b1, b2 = st.sidebar.columns(2)
+if b1.button("↺ Todo", width="stretch", help="Restablece todos los filtros sin volver a cargar los archivos."):
+    st.session_state.filtro_meses = list(meses_disp)
+    st.session_state.filtro_locaciones = []
+    st.session_state.filtro_canales = []
+    st.rerun()
+if b2.button("Último mes", width="stretch"):
+    st.session_state.filtro_meses = [meses_disp[-1]] if meses_disp else []
+    st.session_state.filtro_locaciones = []
+    st.session_state.filtro_canales = []
+    st.rerun()
+
+meses_sel = st.sidebar.multiselect(
+    "Mes", options=meses_disp, key="filtro_meses",
+    format_func=lambda m: pd.Timestamp(m).strftime("%Y-%m"),
+    help="Si dejás Mes vacío se interpreta como todos los meses.",
+)
+locaciones_sel = st.sidebar.multiselect("Locación", options=locaciones_disp, key="filtro_locaciones")
+canales_sel = st.sidebar.multiselect("Canal", options=canales_disp, key="filtro_canales")
+
+venta_f = venta_cm.copy()
+if meses_sel:
+    venta_f = venta_f[venta_f["Mes"].isin(meses_sel)]
 if locaciones_sel:
     venta_f = venta_f[venta_f["Locación"].isin(locaciones_sel)]
 if canales_sel:
     venta_f = venta_f[venta_f["Canal"].isin(canales_sel)]
 
-# Solo filas con CM calculada para los totales/rankings de contribución marginal
-venta_cm_f = venta_f[venta_f["CM_calculada"]]
+# Solo filas con CM calculada para métricas/rankings de contribución marginal.
+venta_cm_f = venta_f[venta_f["CM_calculada"]].copy()
 
 
 def porcentaje_seguro(numerador: pd.Series, denominador: pd.Series, decimales=1) -> pd.Series:
-    """Porcentaje robusto ante ceros, pd.NA y columnas dtype object.
-
-    Fuerza ambos operandos a float64 para evitar el error de pandas 3
-    ``NAType doesn't define __round__`` cuando una división protegida termina
-    con dtype object. Los denominadores cero quedan como NaN.
-    """
+    """Porcentaje robusto ante ceros, pd.NA y columnas dtype object."""
     num = pd.to_numeric(numerador, errors="coerce").astype("float64")
     den = pd.to_numeric(denominador, errors="coerce").astype("float64")
     den = den.mask(den == 0)
@@ -498,59 +704,161 @@ def porcentaje_seguro(numerador: pd.Series, denominador: pd.Series, decimales=1)
 
 
 def resumen_cm(df: pd.DataFrame, agrupar_por) -> pd.DataFrame:
-    """Agrupa y arma Facturación Neta, CM $ y CM % (ponderado, no promedio simple)."""
-    g = df.groupby(agrupar_por, as_index=False).agg(
+    """Agrupa Facturación, cajas, CM $ y CM % ponderado."""
+    if df.empty:
+        cols = ([agrupar_por] if isinstance(agrupar_por, str) else list(agrupar_por)) + [
+            "Facturacion_Neta", "Cajas_Fisicas", "CM_pesos", "Clientes", "CM_%"
+        ]
+        return pd.DataFrame(columns=cols)
+    g = df.groupby(agrupar_por, as_index=False, dropna=False).agg(
         Facturacion_Neta=("Facturacion Neta", "sum"),
         Cajas_Fisicas=("Cajas Fisicas", "sum"),
         CM_pesos=("CM ($)", "sum"),
         Clientes=("Cliente", "nunique"),
     )
-    # División protegida: si una agrupación tiene Facturación Neta = 0, CM_% queda vacío.
-    # (No usar pd.NA acá: en pandas 3 convierte la columna a object y .round() explota
-    # con "TypeError: type NAType doesn't define __round__ method".)
     g["CM_%"] = porcentaje_seguro(g["CM_pesos"], g["Facturacion_Neta"], 1)
     return g.sort_values("CM_pesos", ascending=False)
 
 
+def resumen_productos(df: pd.DataFrame) -> pd.DataFrame:
+    cols = ["Cod. Venta", "Descripción del material"]
+    if df.empty:
+        return pd.DataFrame(columns=cols + ["Facturacion_Neta", "Cajas_Fisicas", "CM_pesos", "Clientes", "CM_%", "CM_Caja"])
+    g = df.groupby(cols, as_index=False, dropna=False).agg(
+        Facturacion_Neta=("Facturacion Neta", "sum"),
+        Cajas_Fisicas=("Cajas Fisicas", "sum"),
+        CM_pesos=("CM ($)", "sum"),
+        Clientes=("Cliente", "nunique"),
+    )
+    g["CM_%"] = porcentaje_seguro(g["CM_pesos"], g["Facturacion_Neta"], 1)
+    cajas = pd.to_numeric(g["Cajas_Fisicas"], errors="coerce").replace(0, float("nan"))
+    g["CM_Caja"] = pd.to_numeric(g["CM_pesos"], errors="coerce") / cajas
+    return g.sort_values("CM_pesos", ascending=False)
+
+
+def _aplicar_filtros_dimension(df, locaciones, canales):
+    out = df.copy()
+    if locaciones:
+        out = out[out["Locación"].isin(locaciones)]
+    if canales:
+        out = out[out["Canal"].isin(canales)]
+    return out
+
+
+def periodo_anterior_comparable():
+    """Devuelve dataset del período inmediatamente anterior si Mes es contiguo."""
+    seleccion = sorted(pd.Timestamp(m) for m in (meses_sel or meses_disp))
+    if not seleccion:
+        return None
+    esperado = list(pd.date_range(seleccion[0], periods=len(seleccion), freq="MS"))
+    if seleccion != esperado:
+        return None
+    meses_prev = list(pd.date_range(end=seleccion[0] - pd.offsets.MonthBegin(1), periods=len(seleccion), freq="MS"))
+    disponibles = set(pd.Timestamp(m) for m in meses_disp)
+    if not set(meses_prev).issubset(disponibles):
+        return None
+    prev = venta_cm[venta_cm["Mes"].isin(meses_prev)]
+    prev = _aplicar_filtros_dimension(prev, locaciones_sel, canales_sel)
+    return prev
+
+
+productos = resumen_productos(venta_cm_f)
+resumen_canal = resumen_cm(venta_cm_f, "Canal")
+resumen_locacion = resumen_cm(venta_cm_f, "Locación")
+
+# Período anterior para deltas ejecutivos.
+venta_prev = periodo_anterior_comparable()
+venta_prev_cm = venta_prev[venta_prev["CM_calculada"]] if venta_prev is not None else None
+
 # ----------------------------------------------------------------------
-# Tabs
+# NAVEGACIÓN
 # ----------------------------------------------------------------------
-tab_resumen, tab_articulo, tab_crudo = st.tabs(
-    ["📊 Resumen general", "🔎 Detalle por artículo", "🗂️ Datos crudos"]
+tab_resumen, tab_rentabilidad, tab_articulo, tab_calidad, tab_crudo = st.tabs(
+    ["🏠 Resumen ejecutivo", "💰 Rentabilidad", "🔎 Detalle por artículo", "✅ Calidad de datos", "🗂️ Datos crudos"]
 )
 
-# --- Tab 1: Resumen general ------------------------------------------------
+# --- Tab 1: Resumen ejecutivo ---------------------------------------------
 with tab_resumen:
-    c1, c2, c3, c4 = st.columns(4)
+    st.markdown('<div class="cmg-section-label">Cockpit de rentabilidad</div>', unsafe_allow_html=True)
+
     fact_total = venta_f["Facturacion Neta"].sum()
     cm_total = venta_cm_f["CM ($)"].sum()
-    c1.metric(
-        "Facturación Neta", fmt_pesos(fact_total),
-        help="Suma de la Facturación Neta de todas las filas filtradas, incluyendo artículos sin regla de costeo definida.",
-    )
-    c2.metric(
-        "Contribución Marginal", fmt_pesos(cm_total),
-        help="Suma de la Contribución Marginal solo de las filas con regla de costeo definida (Tipo P o R).",
-    )
     fact_cm = venta_cm_f["Facturacion Neta"].sum()
     cm_pct = cm_total / fact_cm * 100 if fact_cm else 0.0
-    c3.metric(
-        "CM % (ponderado)", f"{fmt_n(cm_pct, 1)}%",
-        help="CM total dividida por la Facturación Neta de las filas con CM calculada (no por el total general de la primera tarjeta).",
-    )
-    c4.metric(
-        "Clientes distintos", fmt_n(venta_f["Cliente"].nunique()),
-        help="Clientes únicos en las filas filtradas (todas, no solo las que tienen CM calculada).",
+    cajas_total = venta_f["Cajas Fisicas"].sum()
+    cm_caja = cm_total / venta_cm_f["Cajas Fisicas"].sum() if venta_cm_f["Cajas Fisicas"].sum() else 0.0
+    cobertura = fact_cm / fact_total * 100 if fact_total else 0.0
+
+    delta_fact = delta_cm = delta_cmpct = None
+    if venta_prev is not None and not venta_prev.empty:
+        fact_prev = venta_prev["Facturacion Neta"].sum()
+        cm_prev = venta_prev_cm["CM ($)"].sum()
+        fact_prev_cm = venta_prev_cm["Facturacion Neta"].sum()
+        cmpct_prev = cm_prev / fact_prev_cm * 100 if fact_prev_cm else 0.0
+        delta_fact = _delta_pct(fact_total, fact_prev)
+        delta_cm = _delta_pct(cm_total, cm_prev)
+        delta_cmpct = _delta_pp(cm_pct, cmpct_prev)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Facturación Neta", fmt_pesos(fact_total), delta=_texto_delta(delta_fact))
+    k2.metric("Contribución Marginal", fmt_pesos(cm_total), delta=_texto_delta(delta_cm))
+    k3.metric("CM %", f"{fmt_n(cm_pct, 1)}%", delta=_texto_delta(delta_cmpct, " pp"))
+    k4.metric("Cajas Físicas", fmt_n(cajas_total), help="Volumen total para los filtros seleccionados.")
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("CM por Caja", fmt_pesos(cm_caja, 2), help="CM total / Cajas Físicas de artículos costeados.")
+    k6.metric("Clientes", fmt_n(venta_f["Cliente"].nunique()))
+    k7.metric("SKU", fmt_n(venta_f["Cod. Venta"].nunique()))
+    k8.metric(
+        "Cobertura de costeo", f"{fmt_n(cobertura, 1)}%",
+        help="Facturación de filas con regla de CM / Facturación total filtrada.",
     )
 
     divisor()
-    titulo_panel("Tendencia mensual", "Evolución de la Facturación Neta y la Contribución Marginal, mes a mes.")
+    titulo_panel("Qué requiere atención", "Hallazgos automáticos derivados de los filtros actuales; no son recomendaciones comerciales automáticas.")
+
+    neg = productos[productos["CM_pesos"] < 0]
+    n_neg = len(neg)
+    perdida_total = -neg["CM_pesos"].sum() if n_neg else 0.0
+    top5_perdida = -neg.nsmallest(5, "CM_pesos")["CM_pesos"].sum() if n_neg else 0.0
+    conc_perdida = top5_perdida / perdida_total * 100 if perdida_total else 0.0
+    peor_loc = resumen_locacion.sort_values("CM_%").iloc[0] if not resumen_locacion.empty else None
+
+    i1, i2, i3, i4 = st.columns(4)
+    with i1:
+        tarjeta_insight(
+            f"{'Sin' if n_neg == 0 else fmt_n(n_neg)} SKU con CM negativa",
+            "No se detectan productos destruyendo margen en el período." if n_neg == 0 else f"La pérdida agregada de esos SKU es {fmt_pesos(perdida_total)}.",
+            "ok" if n_neg == 0 else "bad",
+        )
+    with i2:
+        tarjeta_insight(
+            "Concentración de pérdidas",
+            "No hay pérdida de CM para concentrar." if n_neg == 0 else f"Los 5 SKU más negativos explican {fmt_n(conc_perdida, 1)}% de la pérdida de CM.",
+            "ok" if n_neg == 0 else ("bad" if conc_perdida >= 60 else "warn"),
+        )
+    with i3:
+        tarjeta_insight(
+            "Cobertura del costeo",
+            f"{fmt_n(cobertura, 1)}% de la facturación tiene una regla de CM calculada.",
+            "ok" if cobertura >= 99 else ("warn" if cobertura >= 95 else "bad"),
+        )
+    with i4:
+        if peor_loc is None:
+            tarjeta_insight("Locaciones", "No hay información para los filtros actuales.", "warn")
+        else:
+            tarjeta_insight(
+                "Menor CM % por locación",
+                f"{peor_loc['Locación']}: {fmt_n(peor_loc['CM_%'], 1)}% sobre {fmt_pesos(peor_loc['Facturacion_Neta'])} de facturación.",
+                "bad" if peor_loc["CM_%"] < 0 else "warn",
+            )
+
+    divisor()
+    titulo_panel("Tendencia mensual", "Facturación Neta y Contribución Marginal. Los filtros de Canal y Locación se mantienen.")
     por_mes = venta_f.groupby("Mes", as_index=False)["Facturacion Neta"].sum()
     if por_mes.empty:
         st.info("No hay datos para los filtros seleccionados.")
     else:
-        # CORREGIDO: antes se asignaba .values por posición y, si faltaba un
-        # mes en venta_cm_f, la CM se desalineaba. Ahora se alinea por mes.
         cm_por_mes = venta_cm_f.groupby("Mes")["CM ($)"].sum()
         por_mes["Contribución Marginal"] = por_mes["Mes"].map(cm_por_mes).fillna(0)
         por_mes["Mes"] = por_mes["Mes"].dt.strftime("%Y-%m")
@@ -559,25 +867,66 @@ with tab_resumen:
     divisor()
     col_a, col_b = st.columns(2)
     with col_a:
-        titulo_panel("Contribución Marginal por Canal", "Participación de cada canal en la CM total del período filtrado.")
-        resumen_canal = resumen_cm(venta_cm_f, "Canal")
+        titulo_panel("Rentabilidad por Canal", "CM positiva y negativa sin distorsiones de un gráfico circular.")
         if resumen_canal.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
-            st.plotly_chart(fig_donut(resumen_canal, "Canal", "CM_pesos"), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_barras_cm(resumen_canal, "Canal"), width="stretch", theme=None, config=CONFIG_CHART)
             with st.expander("Ver tabla completa"):
                 st.dataframe(estilo_resumen(resumen_canal), width="stretch", hide_index=True)
                 boton_descarga(resumen_canal, "cm_por_canal.csv")
     with col_b:
-        titulo_panel("Contribución Marginal por Locación", "Participación de cada locación en la CM total del período filtrado.")
-        resumen_locacion = resumen_cm(venta_cm_f, "Locación")
+        titulo_panel("Rentabilidad por Locación", "Comparación directa de la CM generada por cada operación.")
         if resumen_locacion.empty:
             st.info("No hay datos para los filtros seleccionados.")
         else:
-            st.plotly_chart(fig_donut(resumen_locacion, "Locación", "CM_pesos"), width="stretch", theme=None, config=CONFIG_CHART)
+            st.plotly_chart(fig_barras_cm(resumen_locacion, "Locación"), width="stretch", theme=None, config=CONFIG_CHART)
             with st.expander("Ver tabla completa"):
                 st.dataframe(estilo_resumen(resumen_locacion), width="stretch", hide_index=True)
                 boton_descarga(resumen_locacion, "cm_por_locacion.csv")
+
+# --- Tab 2: Rentabilidad ---------------------------------------------------
+with tab_rentabilidad:
+    titulo_panel("Mapa de rentabilidad de productos", "Cada burbuja es un SKU: volumen en X, CM % en Y y tamaño según facturación. Las líneas punteadas son las medianas del conjunto filtrado.")
+    if productos.empty:
+        st.info("No hay productos costeados para los filtros seleccionados.")
+    else:
+        st.plotly_chart(fig_matriz_rentabilidad(productos), width="stretch", theme=None, config=CONFIG_CHART)
+
+        divisor()
+        a, b = st.columns(2)
+        with a:
+            titulo_panel("Top generadores de CM", "Productos con mayor contribución marginal absoluta.")
+            st.plotly_chart(fig_ranking_productos(productos, mejores=True), width="stretch", theme=None, config=CONFIG_CHART)
+        with b:
+            titulo_panel("Productos que destruyen CM", "Los SKU con menor contribución marginal aparecen primero.")
+            if (productos["CM_pesos"] < 0).any():
+                st.plotly_chart(fig_ranking_productos(productos[productos["CM_pesos"] < 0], mejores=False), width="stretch", theme=None, config=CONFIG_CHART)
+            else:
+                st.success("No hay SKU con Contribución Marginal negativa para los filtros actuales.")
+
+        divisor()
+        titulo_panel("Pareto de generación de margen", "Muestra qué tan concentrada está la CM positiva en los principales SKU.")
+        st.plotly_chart(fig_pareto(productos), width="stretch", theme=None, config=CONFIG_CHART)
+
+        divisor()
+        titulo_panel("Tabla ejecutiva de productos", "Ordená y filtrá visualmente para detectar combinaciones de volumen, margen y concentración de clientes.")
+        tabla_prod = productos.copy()
+        tabla_prod["Estado"] = tabla_prod["CM_pesos"].map(lambda x: "🔴 CM negativa" if x < 0 else "🟢 CM positiva")
+        cols = ["Cod. Venta", "Descripción del material", "Facturacion_Neta", "Cajas_Fisicas", "CM_pesos", "CM_%", "CM_Caja", "Clientes", "Estado"]
+        st.dataframe(
+            tabla_prod[cols].style.format({
+                "Cod. Venta": fmt_entero,
+                "Facturacion_Neta": fmt_pesos,
+                "Cajas_Fisicas": fmt_n,
+                "CM_pesos": fmt_pesos,
+                "CM_%": lambda v: f"{fmt_n(v, 1)}%",
+                "CM_Caja": lambda v: fmt_pesos(v, 2),
+                "Clientes": fmt_n,
+            }, na_rep="—"),
+            width="stretch", hide_index=True, height=520,
+        )
+        boton_descarga(tabla_prod[cols], "rentabilidad_productos.csv", "⬇️ Descargar análisis de productos")
 
 # --- Tab 2: Detalle por artículo -------------------------------------------
 with tab_articulo:
@@ -720,7 +1069,62 @@ with tab_articulo:
                 width="stretch", hide_index=True,
             )
 
-# --- Tab 3: Datos crudos ----------------------------------------------------
+# --- Tab 4: Calidad de datos -------------------------------------------------
+with tab_calidad:
+    titulo_panel("Calidad y cobertura de los datos", "Controles visibles para saber qué tan confiable es el análisis antes de tomar decisiones.")
+
+    filas_total = len(venta_cm)
+    filas_costeadas = int(venta_cm["CM_calculada"].sum())
+    fact_total_dq = venta_cm["Facturacion Neta"].sum()
+    fact_costeada_dq = venta_cm.loc[venta_cm["CM_calculada"], "Facturacion Neta"].sum()
+    cobertura_filas = filas_costeadas / filas_total * 100 if filas_total else 0
+    cobertura_fact = fact_costeada_dq / fact_total_dq * 100 if fact_total_dq else 0
+
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Filas de venta", fmt_n(filas_total))
+    q2.metric("Filas con CM", f"{fmt_n(cobertura_filas, 1)}%")
+    q3.metric("Facturación con CM", f"{fmt_n(cobertura_fact, 1)}%")
+    q4.metric("Meses cargados", fmt_n(venta_cm["Mes"].nunique()))
+
+    controles = []
+    controles.append(("Artículo sin maestro/tipo", int(venta_cm["Tipo de Prod."].isna().sum()), "Filas de venta cuyo artículo no encuentra Tipo de Prod. en Maestro."))
+    controles.append(("Tipo sin regla de costeo", int((~venta_cm["CM_calculada"]).sum()), "Filas cuyo Tipo de Prod. todavía no es P/R."))
+    controles.append(("Cliente vacío", int(venta_cm["Cliente"].isna().sum()), "Registros sin código de cliente."))
+    controles.append(("Canal vacío", int(venta_cm["Canal"].isna().sum()), "Registros sin canal comercial."))
+    controles.append(("Locación vacía", int(venta_cm["Locación"].isna().sum()), "Registros sin locación."))
+    if "Descripción del material" in venta_cm.columns:
+        controles.append(("Descripción de artículo vacía", int(venta_cm["Descripción del material"].isna().sum()), "Filas sin descripción de material."))
+
+    # Claves maestras que sí deberían ser únicas antes de un merge.
+    duplicados_maestro = int(maestro.duplicated(subset=["Cod. Venta"], keep=False).sum()) if "Cod. Venta" in maestro.columns else 0
+    controles.append(("Duplicados en Maestro", duplicados_maestro, "Filas involucradas en códigos de artículo repetidos en Maestro."))
+    if {"Cod. Venta", "Mes"}.issubset(mo.columns):
+        controles.append(("Duplicados en MO", int(mo.duplicated(subset=["Cod. Venta", "Mes"], keep=False).sum()), "Filas involucradas en claves Cod. Venta + Mes repetidas."))
+    if {"Locación", "Mes"}.issubset(dxl.columns):
+        controles.append(("Duplicados en DatosxLocacion", int(dxl.duplicated(subset=["Locación", "Mes"], keep=False).sum()), "Filas involucradas en claves Locación + Mes repetidas."))
+    if {"Cod. Venta", "Mes"}.issubset(fletest0.columns):
+        controles.append(("Duplicados en FletesT0", int(fletest0.duplicated(subset=["Cod. Venta", "Mes"], keep=False).sum()), "Filas involucradas en claves Cod. Venta + Mes repetidas."))
+
+    df_calidad = pd.DataFrame(controles, columns=["Control", "Registros", "Qué significa"])
+    df_calidad["Estado"] = df_calidad["Registros"].map(lambda x: "✅ OK" if x == 0 else "⚠️ Revisar")
+    st.dataframe(df_calidad[["Estado", "Control", "Registros", "Qué significa"]], width="stretch", hide_index=True)
+
+    if (df_calidad["Registros"] > 0).any():
+        st.warning("Los controles marcados no implican necesariamente un error de negocio, pero deben revisarse antes de usar el dato para decisiones sensibles.")
+    else:
+        st.success("No se detectaron incidencias en los controles básicos de calidad.")
+
+    with st.expander("Ver artículos sin regla de costeo"):
+        sin_costeo = venta_cm.loc[~venta_cm["CM_calculada"], [c for c in ["Cod. Venta", "Descripción del material", "Tipo de Prod.", "Facturacion Neta", "Cajas Fisicas"] if c in venta_cm.columns]]
+        if sin_costeo.empty:
+            st.success("Todos los registros tienen regla de costeo.")
+        else:
+            resumen_sc = sin_costeo.groupby([c for c in ["Cod. Venta", "Descripción del material", "Tipo de Prod."] if c in sin_costeo.columns], dropna=False, as_index=False).agg(
+                Facturacion_Neta=("Facturacion Neta", "sum"), Cajas_Fisicas=("Cajas Fisicas", "sum")
+            )
+            st.dataframe(resumen_sc, width="stretch", hide_index=True)
+
+# --- Tab 5: Datos crudos ----------------------------------------------------
 with tab_crudo:
     opciones_hojas = {**datos, "venta (con CM calculada)": venta_cm}
     hoja = st.selectbox("Elegí una hoja", options=list(opciones_hojas.keys()))
