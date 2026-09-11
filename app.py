@@ -358,9 +358,10 @@ CONFIG_CHART = {"displayModeBar": False}
 # ----------------------------------------------------------------------
 # Carga de datos + cálculo de CM  (sin cambios respecto del original)
 # ----------------------------------------------------------------------
-@st.cache_data(show_spinner="Leyendo y limpiando el archivo...")
-def cargar(archivo) -> dict[str, pd.DataFrame]:
-    return cargar_todo(archivo)
+@st.cache_data(show_spinner="Leyendo, identificando y limpiando las fuentes...")
+def cargar(archivos) -> dict[str, pd.DataFrame]:
+    """Compatible con un único Excel integral o con múltiples Excel complementarios."""
+    return cargar_todo(archivos)
 
 
 @st.cache_data(show_spinner="Calculando Contribución Marginal...")
@@ -379,17 +380,30 @@ st.markdown(
 )
 
 st.sidebar.markdown('<span class="cmg-marca">AppCMG</span>', unsafe_allow_html=True)
-archivo = st.sidebar.file_uploader("Subí el archivo AppCMG.xlsx", type=["xlsx"])
+archivos = st.sidebar.file_uploader(
+    "Subí la fuente de datos AppCMG",
+    type=["xlsx"],
+    accept_multiple_files=True,
+    help=(
+        "Podés subir el Excel integral actual o varios archivos .xlsx complementarios. "
+        "La app identifica las fuentes por nombre de hoja y, cuando es posible, por sus columnas."
+    ),
+)
 
-if archivo is None:
-    titulo_panel("Subí el archivo para empezar")
+if not archivos:
+    titulo_panel("Subí los datos para empezar")
     st.info(
-        "⬅️ Subí el archivo Excel desde la barra lateral. Tiene que tener estas 7 hojas: "
-        "**VENTA**, **Maestro Artículos**, **Receta**, **MO**, **DatosxLocacion**, **FletesT0** y **Exhibición**."
+        "⬅️ Podés subir **un único Excel integral** (como el AppCMG actual) o **varios Excel**. "
+        "Entre todos deben aportar estas 7 fuentes: **VENTA**, **Maestro Artículos**, **Receta**, "
+        "**MO**, **DatosxLocacion**, **FletesT0** y **Exhibición**."
     )
     st.stop()
 
-datos = cargar(archivo)
+try:
+    datos = cargar(archivos)
+except Exception as exc:
+    st.error(f"No se pudieron procesar las fuentes: {exc}")
+    st.stop()
 
 st.sidebar.header("Supuestos")
 pallets_por_camion = st.sidebar.number_input(
@@ -408,7 +422,12 @@ dxl = datos["datosxlocacion"]
 fletest0 = datos["fletest0"]
 
 n_sin_costeo = (~venta_cm["CM_calculada"]).sum()
-st.success(f"Archivo cargado: {fmt_n(len(venta_cm))} filas de venta.")
+_n_archivos = len(archivos)
+_etiqueta_archivos = "archivo" if _n_archivos == 1 else "archivos"
+st.success(
+    f"{_n_archivos} {_etiqueta_archivos} procesado{'s' if _n_archivos != 1 else ''}: "
+    f"{fmt_n(len(venta_cm))} filas de venta."
+)
 if n_sin_costeo:
     tipos_sin_costeo = sorted(
         venta_cm.loc[~venta_cm["CM_calculada"], "Tipo de Prod."].dropna().unique()
