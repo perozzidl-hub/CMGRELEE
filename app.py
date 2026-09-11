@@ -457,7 +457,9 @@ def resumen_cm(df: pd.DataFrame, agrupar_por) -> pd.DataFrame:
         Clientes=("Cliente", "nunique"),
     )
     # División protegida: si una agrupación tiene Facturación Neta = 0, CM_% queda vacío.
-    g["CM_%"] = (g["CM_pesos"] / g["Facturacion_Neta"].replace(0, pd.NA) * 100).round(1)
+    # (No usar pd.NA acá: en pandas 3 convierte la columna a object y .round() explota
+    # con "TypeError: type NAType doesn't define __round__ method".)
+    g["CM_%"] = (g["CM_pesos"] / g["Facturacion_Neta"] * 100).where(g["Facturacion_Neta"] != 0).round(1)
     return g.sort_values("CM_pesos", ascending=False)
 
 
@@ -607,8 +609,8 @@ with tab_articulo:
         por_cliente = v_art.groupby(cols_cliente, as_index=False).agg(**agg_cliente)
         if calculable:
             por_cliente["CM_%"] = (
-                por_cliente["CM_pesos"] / por_cliente["Facturacion_Neta"].replace(0, pd.NA) * 100
-            ).round(1)
+                por_cliente["CM_pesos"] / por_cliente["Facturacion_Neta"] * 100
+            ).where(por_cliente["Facturacion_Neta"] != 0).round(1)
         por_cliente = por_cliente.sort_values("Facturacion_Neta", ascending=False)
 
         columna_top = "CM_pesos" if calculable else "Facturacion_Neta"
