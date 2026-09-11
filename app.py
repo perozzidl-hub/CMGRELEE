@@ -269,24 +269,34 @@ def boton_descarga(df, nombre_archivo, label="⬇️ Descargar CSV"):
 
 
 def fig_tendencia_mensual(por_mes):
+    """Tendencia mensual legible incluso cuando hay uno o dos meses.
+
+    Forzamos el eje X a categórico para que valores como ``2026-07`` no sean
+    reinterpretados por Plotly como fechas continuas. Esto evita que, con un
+    único mes, aparezca un rango artificial de días/semanas alrededor del dato.
+    """
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=por_mes["Mes"], y=por_mes["Facturacion Neta"],
         mode="lines+markers", name="Facturación Neta",
-        line=dict(color=CARBON, width=2.5), marker=dict(size=6),
+        line=dict(color=CARBON, width=2.5), marker=dict(size=7),
     ))
     fig.add_trace(go.Scatter(
         x=por_mes["Mes"], y=por_mes["Contribución Marginal"],
         mode="lines+markers", name="Contribución Marginal",
-        line=dict(color=ROJO, width=2.5), marker=dict(size=6),
+        line=dict(color=ROJO, width=2.5), marker=dict(size=7),
         fill="tozeroy", fillcolor="rgba(228,3,46,0.08)",
     ))
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
-        height=320, hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        yaxis=dict(gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f", automargin=True),
-        margin=dict(l=8, r=8, t=36, b=8),
+        height=370, hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0),
+        xaxis=dict(type="category", title=None, automargin=True, tickangle=0),
+        yaxis=dict(
+            gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f",
+            automargin=True, separatethousands=True, zeroline=True,
+        ),
+        margin=dict(l=95, r=35, t=50, b=55),
     )
     return fig
 
@@ -447,13 +457,20 @@ def fig_matriz_rentabilidad(productos):
     # Tamaño acotado para que una venta extrema no opaque todo el gráfico.
     fact_pos = d["Facturacion_Neta"].clip(lower=0)
     max_fact = fact_pos.max()
-    tamanos = 12 + (fact_pos / max_fact * 34 if max_fact else 0)
+    tamanos = 14 + (fact_pos / max_fact * 34 if max_fact else 0)
     colores = [VERDE if v >= 0 else ROJO for v in d["CM_%"]]
     custom = d[["Cod. Venta", "Descripción del material", "Facturacion_Neta", "CM_pesos"]].to_numpy()
 
+    # Cuando quedan pocos SKU, mostrar el código junto a la burbuja aporta más
+    # que dejar grandes áreas vacías sin identificación visual.
+    mostrar_etiquetas = len(d) <= 12
+    modo = "markers+text" if mostrar_etiquetas else "markers"
+    textos = d["Cod. Venta"].map(fmt_entero) if mostrar_etiquetas else None
+
     fig = go.Figure(go.Scatter(
-        x=d["Cajas_Fisicas"], y=d["CM_%"], mode="markers",
-        marker=dict(size=tamanos, color=colores, opacity=0.68, line=dict(width=1, color=BLANCO)),
+        x=d["Cajas_Fisicas"], y=d["CM_%"], mode=modo,
+        text=textos, textposition="top center", textfont=dict(size=11, color=CARBON),
+        marker=dict(size=tamanos, color=colores, opacity=0.72, line=dict(width=1, color=BLANCO)),
         customdata=custom,
         hovertemplate=(
             "<b>%{customdata[0]} - %{customdata[1]}</b><br>"
@@ -468,10 +485,16 @@ def fig_matriz_rentabilidad(productos):
     fig.add_hline(y=0, line_width=1.4, line_color=ROJO, opacity=.75)
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
-        height=470,
-        xaxis=dict(title="Volumen (Cajas Físicas)", gridcolor=GRIS_BORDE, tickformat=",.0f"),
-        yaxis=dict(title="CM %", gridcolor=GRIS_BORDE, ticksuffix="%"),
-        margin=dict(l=15, r=15, t=25, b=45),
+        height=540,
+        xaxis=dict(
+            title="Volumen (Cajas Físicas)", gridcolor=GRIS_BORDE,
+            tickformat=",.0f", automargin=True, separatethousands=True,
+        ),
+        yaxis=dict(
+            title="CM %", gridcolor=GRIS_BORDE, ticksuffix="%",
+            tickformat=".1f", automargin=True,
+        ),
+        margin=dict(l=90, r=40, t=45, b=70),
         showlegend=False,
     )
     return fig
@@ -519,20 +542,37 @@ def fig_pareto(productos):
     etiquetas = d["Cod. Venta"].map(fmt_entero)
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=etiquetas, y=d["CM_pesos"], name="CM ($)", marker=dict(color=CARBON)))
+    fig.add_trace(go.Bar(
+        x=etiquetas, y=d["CM_pesos"], name="CM ($)", marker=dict(color=CARBON),
+        hovertemplate="SKU %{x}<br>CM: $ %{y:,.0f}<extra></extra>",
+    ))
     fig.add_trace(go.Scatter(
         x=etiquetas, y=d["Acum_%"], name="CM acumulada %", yaxis="y2",
-        mode="lines+markers", line=dict(color=ROJO, width=2), marker=dict(size=5),
+        mode="lines+markers", line=dict(color=ROJO, width=2.2), marker=dict(size=6),
+        hovertemplate="SKU %{x}<br>CM acumulada: %{y:.1f}%<extra></extra>",
     ))
     fig.add_hline(y=80, yref="y2", line_dash="dot", line_color=DORADO)
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
-        height=390, hovermode="x unified",
-        xaxis=dict(title="SKU (ordenados por CM)", tickangle=-45),
-        yaxis=dict(title="CM ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
-        yaxis2=dict(title="Acumulado", overlaying="y", side="right", range=[0, 105], ticksuffix="%"),
-        legend=dict(orientation="h", y=1.08),
-        margin=dict(l=10, r=10, t=45, b=80),
+        height=470, hovermode="x unified",
+        # Los códigos son identificadores, no magnitudes. Forzar category evita
+        # que Plotly los trate como números y dibuje barras con anchos absurdos.
+        xaxis=dict(
+            type="category", title="SKU (ordenados por CM)", tickangle=-45,
+            automargin=True, categoryorder="array", categoryarray=list(etiquetas),
+        ),
+        yaxis=dict(
+            title="CM ($)", gridcolor=GRIS_BORDE, tickprefix="$ ",
+            tickformat="~s", automargin=True, separatethousands=True,
+        ),
+        yaxis2=dict(
+            title="CM acumulada %", overlaying="y", side="right", range=[0, 105],
+            ticksuffix="%", tickformat=".0f", automargin=True,
+            tickmode="array", tickvals=[0, 20, 40, 60, 80, 100],
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, x=0),
+        margin=dict(l=100, r=90, t=60, b=95),
+        bargap=0.18,
     )
     return fig
 
@@ -650,19 +690,20 @@ def fig_costos_scope(df_scope, top_n=12):
 
 
 def fig_mix_productos(productos, top_n=12):
-    """Mix de productos por CM, útil dentro de cliente/canal/locación."""
+    """Mix de productos por facturación, con margen suficiente para leer etiquetas."""
     if productos.empty:
         return go.Figure()
     d = productos.nlargest(top_n, "Facturacion_Neta").sort_values("Facturacion_Neta", ascending=True).copy()
     etiquetas = []
     for _, row in d.iterrows():
         desc = str(row.get("Descripción del material", ""))
-        if len(desc) > 28:
-            desc = desc[:27] + "…"
+        if len(desc) > 34:
+            desc = desc[:33] + "…"
         etiquetas.append(f"{fmt_entero(row['Cod. Venta'])} - {desc}")
     colores = [VERDE if v >= 0 else ROJO for v in d["CM_pesos"]]
     fig = go.Figure(go.Bar(
         x=d["Facturacion_Neta"], y=etiquetas, orientation="h", marker=dict(color=colores),
+        text=[fmt_pesos(v) for v in d["Facturacion_Neta"]], textposition="outside", cliponaxis=False,
         customdata=d[["CM_pesos", "CM_%", "Cajas_Fisicas"]].to_numpy(),
         hovertemplate=(
             "<b>%{y}</b><br>Facturación: $ %{x:,.0f}<br>CM: $ %{customdata[0]:,.0f}<br>"
@@ -671,10 +712,13 @@ def fig_mix_productos(productos, top_n=12):
     ))
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
-        height=max(350, 32 * len(d)), showlegend=False,
-        xaxis=dict(title="Facturación Neta ($)", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.0f"),
+        height=max(330, 44 * len(d) + 100), showlegend=False,
+        xaxis=dict(
+            title="Facturación Neta ($)", gridcolor=GRIS_BORDE, tickprefix="$ ",
+            tickformat=",.0f", automargin=True, separatethousands=True,
+        ),
         yaxis=dict(title=None, automargin=True),
-        margin=dict(l=8, r=20, t=15, b=35),
+        margin=dict(l=25, r=120, t=25, b=75),
     )
     return fig
 
@@ -900,7 +944,7 @@ def fig_mix_costos(comp: pd.DataFrame, top_n=10):
 
 
 def fig_tendencia_eficiencia(df_cm: pd.DataFrame):
-    """Evolución mensual de Costo/Caja, CM/Caja y CM %."""
+    """Evolución mensual de Costo/Caja y CM/Caja con ejes legibles."""
     if df_cm is None or df_cm.empty:
         return go.Figure()
     d = df_cm.groupby("Mes", as_index=False).agg(
@@ -917,15 +961,26 @@ def fig_tendencia_eficiencia(df_cm: pd.DataFrame):
     d["Mes_txt"] = pd.to_datetime(d["Mes"]).dt.strftime("%Y-%m")
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=d["Mes_txt"], y=d["Costo_Caja"], mode="lines+markers", name="Costo / Caja", line=dict(color=CARBON, width=2.5)))
-    fig.add_trace(go.Scatter(x=d["Mes_txt"], y=d["CM_Caja"], mode="lines+markers", name="CM / Caja", line=dict(color=ROJO, width=2.5)))
+    fig.add_trace(go.Scatter(
+        x=d["Mes_txt"], y=d["Costo_Caja"], mode="lines+markers", name="Costo / Caja",
+        line=dict(color=CARBON, width=2.5), marker=dict(size=7),
+        hovertemplate="%{x}<br>Costo/Caja: $ %{y:,.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=d["Mes_txt"], y=d["CM_Caja"], mode="lines+markers", name="CM / Caja",
+        line=dict(color=ROJO, width=2.5), marker=dict(size=7),
+        hovertemplate="%{x}<br>CM/Caja: $ %{y:,.2f}<extra></extra>",
+    ))
     fig.update_layout(**PLOTLY_BASE)
     fig.update_layout(
-        height=390, hovermode="x unified",
-        xaxis=dict(title=None),
-        yaxis=dict(title="$ por Caja Física", gridcolor=GRIS_BORDE, tickprefix="$ ", tickformat=",.2f"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=10, r=20, t=45, b=35),
+        height=450, hovermode="x unified",
+        xaxis=dict(type="category", title=None, automargin=True, tickangle=0),
+        yaxis=dict(
+            title="$ por Caja Física", gridcolor=GRIS_BORDE, tickprefix="$ ",
+            tickformat=",.2f", automargin=True, separatethousands=True,
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0),
+        margin=dict(l=115, r=35, t=55, b=60),
     )
     return fig
 
